@@ -93,20 +93,35 @@ manifest come from the same place. For higher assurance, pin a release tag with
 ## Setup menu
 
 ```text
-================================
-       archKDE-play Setup
-================================
+  ╭──────────────────────────────────────────────────╮
+  │  archKDE-play                                    │
+  │  Arch Linux gaming setup                         │
+  ╰──────────────────────────────────────────────────╯
 
-[1] Recommended Gaming Setup
-[2] Custom Installation
-[3] Install GPU Drivers
-[4] Gaming Applications
-[5] Performance Optimization
-[6] Check System Compatibility
-[0] Exit
+  System   Arch Linux x86_64 · NVIDIA GPU · KDE Plasma
+  Safety   No partitions · No bootloader edits · No auto-reboot
 
-Choose an option:
+  [1] Recommended Gaming Setup            ★ Recommended
+      Drivers, KDE, Steam, tools, and performance setup
+  [2] Custom Installation
+      Choose exactly which modules to install
+  [3] Install GPU Drivers
+      NVIDIA, AMD, Intel, and hybrid graphics
+  [4] Gaming Applications
+      Steam, Lutris, Heroic, Wine, GameMode, MangoHud
+  [5] Performance Optimization
+      SSD trim and safe power profiles
+  [6] Check System Compatibility
+      Read-only check; nothing is changed
+  [0] Exit
+      Quit without changing anything
+
+  Press Enter for the recommended setup, or type a number.
+  Choose an option [1]:
 ```
+
+The menu adapts to the terminal: it uses box-drawing characters and colors on
+UTF-8 terminals, and falls back to plain ASCII when needed.
 
 - **1. Recommended** — system update, Zen kernel, GPU drivers, KDE Plasma,
   gaming tools, Flatpak, and safe performance settings.

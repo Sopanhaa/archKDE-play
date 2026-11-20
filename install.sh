@@ -530,18 +530,106 @@ show_module_menu() {
     printf 'a range such as 03-06, or "all".\n'
 }
 
+menu_option() {
+    local key="$1"
+    local label="$2"
+    local description="${3:-}"
+    local tag="${4:-}"
+
+    printf '  %s[%s]%s %s%-42s%s' \
+        "$C_BOLD$C_YELLOW" "$key" "$C_RESET" "$C_BOLD" "$label" "$C_RESET"
+    if [[ -n "$tag" ]]; then
+        printf '  %s%s%s' "$C_GREEN" "$tag" "$C_RESET"
+    fi
+    printf '\n'
+    if [[ -n "$description" ]]; then
+        printf '       %s%s%s\n' "$C_DIM" "$description" "$C_RESET"
+    fi
+}
+
 show_main_menu() {
-    printf '\n================================\n'
-    printf '       archKDE-play Setup\n'
-    printf '================================\n\n'
-    printf '[1] Recommended Gaming Setup\n'
-    printf '[2] Custom Installation\n'
-    printf '[3] Install GPU Drivers\n'
-    printf '[4] Gaming Applications\n'
-    printf '[5] Performance Optimization\n'
-    printf '[6] Check System Compatibility\n'
-    printf '[0] Exit\n'
-    printf '\nPress Enter for the recommended setup.\n'
+    local locale="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+    local sep=" | "
+    local recommended_mark="*"
+    local top_left="+"
+    local top_right="+"
+    local bottom_left="+"
+    local bottom_right="+"
+    local horizontal="-"
+    local vertical="|"
+    local rule=""
+    local i
+
+    locale="${locale,,}"
+    if [[ "$locale" == *utf-8* || "$locale" == *utf8* ]] &&
+        [[ "${TERM:-dumb}" != "dumb" ]]; then
+        sep=" · "
+        recommended_mark="★"
+        top_left="╭"
+        top_right="╮"
+        bottom_left="╰"
+        bottom_right="╯"
+        horizontal="─"
+        vertical="│"
+    fi
+    for ((i = 0; i < 50; i++)); do
+        rule+="$horizontal"
+    done
+
+    local os="Linux"
+    local gpu="Unknown GPU"
+    local kde=""
+    local info vendors
+    [[ -f /etc/arch-release ]] && os="Arch Linux"
+    info="$(detect_system_gpu_info)"
+    vendors="$(detect_gpu_vendors "$info")"
+    local -a vendor_list=()
+    mapfile -t vendor_list <<<"$vendors"
+    gpu="$(gpu_vendor_label "${vendor_list[@]}") GPU"
+    if command -v plasmashell >/dev/null 2>&1; then
+        kde="KDE Plasma"
+    fi
+
+    local system_line
+    system_line="$os $(uname -m)${sep}${gpu}"
+    if [[ -n "$kde" ]]; then
+        system_line+="${sep}${kde}"
+    fi
+    local safety_line="No partitions${sep}No bootloader edits${sep}No auto-reboot"
+
+    printf '\n'
+    printf '  %s%s%s\n' "$C_CYAN" "${top_left}${rule}${top_right}" "$C_RESET"
+    printf '  %s%s%s %s%-48s%s %s%s%s\n' \
+        "$C_CYAN" "$vertical" "$C_RESET" "$C_BOLD" " archKDE-play" "$C_RESET" \
+        "$C_CYAN" "$vertical" "$C_RESET"
+    printf '  %s%s%s %-48s %s%s%s\n' \
+        "$C_CYAN" "$vertical" "$C_RESET" " Arch Linux gaming setup" \
+        "$C_CYAN" "$vertical" "$C_RESET"
+    printf '  %s%s%s\n' \
+        "$C_CYAN" "${bottom_left}${rule}${bottom_right}" "$C_RESET"
+    printf '\n  %sSystem%s   %s\n' "$C_BOLD" "$C_RESET" "$system_line"
+    printf '  %sSafety%s   %s%s%s\n' \
+        "$C_BOLD" "$C_RESET" "$C_DIM" "$safety_line" "$C_RESET"
+    printf '\n'
+
+    menu_option 1 "Recommended Gaming Setup" \
+        "Drivers, KDE, Steam, tools, and performance setup" \
+        "${recommended_mark} Recommended"
+    menu_option 2 "Custom Installation" \
+        "Choose exactly which modules to install"
+    menu_option 3 "Install GPU Drivers" \
+        "NVIDIA, AMD, Intel, and hybrid graphics"
+    menu_option 4 "Gaming Applications" \
+        "Steam, Lutris, Heroic, Wine, GameMode, MangoHud"
+    menu_option 5 "Performance Optimization" \
+        "SSD trim and safe power profiles"
+    menu_option 6 "Check System Compatibility" \
+        "Read-only check; nothing is changed"
+    menu_option 0 "Exit" \
+        "Quit without changing anything"
+
+    printf '\n  %sPress Enter for the recommended setup, or type a number.%s\n' \
+        "$C_DIM" "$C_RESET"
 }
 
 show_selection() {
@@ -594,7 +682,7 @@ interactive_select() {
     show_main_menu
 
     while true; do
-        printf '\nChoose an option: '
+        printf '\n  Choose an option [1]: '
         if ! IFS= read -r answer; then
             printf '\n'
             return 1
@@ -709,13 +797,6 @@ choose_modules() {
     interactive_select
 }
 
-section "Arch KDE Gaming Setup"
-if ((DRY_RUN || CHECK_ONLY)); then
-    log WARN "Log file: not written (dry-run/check mode)."
-else
-    log INFO "Log file: $LOG_FILE"
-fi
-
 # Show the setup menu before the checks so the user can also choose the
 # "Check System Compatibility" option.
 if ((!CHECK_ONLY && !SELECTION_SET && !FULL_INSTALL && !PROFILE_SET)); then
@@ -726,6 +807,12 @@ if ((!CHECK_ONLY && !SELECTION_SET && !FULL_INSTALL && !PROFILE_SET)); then
         log INFO "Installation cancelled. Nothing was changed."
         exit 0
     fi
+fi
+
+if ((DRY_RUN || CHECK_ONLY)); then
+    log WARN "Log file: not written (dry-run/check mode)."
+else
+    log INFO "Log file: $LOG_FILE"
 fi
 
 if ! run_preflight_checks; then
