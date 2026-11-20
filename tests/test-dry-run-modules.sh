@@ -94,6 +94,7 @@ export LOG_FILE="$tmp_dir/test.log"
 export MANIFEST_FILE="$tmp_dir/rollback/manifest.txt"
 export BACKUP_DIR="$tmp_dir/backups"
 export PACMAN_CONF="$tmp_dir/pacman.conf"
+export ARCHKDE_ALLOW_PACMAN_CONF_OVERRIDE=1
 export SETUP_TEST_MARKER="$marker"
 export DRY_RUN=1
 export NO_COLOR=1

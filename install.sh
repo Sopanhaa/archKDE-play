@@ -5,6 +5,11 @@ if [ -z "${BASH_VERSION:-}" ]; then
     exit 1
 fi
 
+if ((EUID == 0)); then
+    printf 'Run this installer as a regular user, not root.\n' >&2
+    exit 1
+fi
+
 set -Eeuo pipefail
 
 # Decide about colour before lib/common.sh is sourced, because the installer
@@ -119,6 +124,17 @@ bootstrap_verify_manifest() {
 
     command -v sha256sum >/dev/null 2>&1 ||
         bootstrap_die "sha256sum is required to verify the downloaded installer."
+    if ! awk '
+        {
+            path = $0
+            sub(/^[^[:space:]]+[[:space:]]+\*?/, "", path)
+            if (path ~ /^\// || path ~ /(^|\/)\.\.(\/|$)/) {
+                exit 1
+            }
+        }
+    ' "$manifest"; then
+        bootstrap_die "SHA256SUMS contains an unsafe path."
+    fi
     for required in \
         install.sh \
         lib/common.sh \
@@ -148,10 +164,15 @@ bootstrap_remote_installer() {
         esac
     done
 
-    [[ "$ARCHKDE_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+    [[ "$ARCHKDE_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] ||
         bootstrap_die "ARCHKDE_REPO must look like owner/repository."
-    [[ "$ARCHKDE_REF" =~ ^[A-Za-z0-9._/-]+$ ]] ||
+    [[ "$ARCHKDE_REPO" != *".."* ]] ||
+        bootstrap_die "ARCHKDE_REPO contains an unsafe path segment."
+    [[ "$ARCHKDE_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] ||
         bootstrap_die "ARCHKDE_REF contains unsupported characters."
+    if [[ "$ARCHKDE_REF" == *".."* || "$ARCHKDE_REF" == *"//"* || "$ARCHKDE_REF" == */ ]]; then
+        bootstrap_die "ARCHKDE_REF contains an unsafe path segment."
+    fi
 
     if [[ "${ARCHKDE_BOOTSTRAPPED:-0}" == "1" ]]; then
         bootstrap_die "The downloaded installer is incomplete (lib/ or modules/ is missing)."
@@ -159,6 +180,11 @@ bootstrap_remote_installer() {
 
     command -v tar >/dev/null 2>&1 ||
         bootstrap_die "tar is required to unpack the installer."
+
+    if [[ "${ARCHKDE_SKIP_CHECKSUM:-0}" == "1" &&
+        "${ARCHKDE_ALLOW_INSECURE_SOURCE:-0}" != "1" ]]; then
+        bootstrap_die "Refusing to skip checksum verification for a remote installer. Use a local test source or verify SHA256SUMS."
+    fi
 
     trap bootstrap_cleanup EXIT
     BOOTSTRAP_TMP="$(mktemp -d)" ||
@@ -172,6 +198,22 @@ bootstrap_remote_installer() {
     archive="$BOOTSTRAP_TMP/archkde-play.tar.gz"
     bootstrap_download "$ARCHKDE_ARCHIVE_URL" "$archive"
     [[ -s "$archive" ]] || bootstrap_die "The downloaded archive is empty."
+
+    # If the user pinned the archive hash, verify it before unpacking anything.
+    if [[ -n "${ARCHKDE_SHA256:-}" ]]; then
+        actual="$(bootstrap_file_sha256 "$archive")" ||
+            bootstrap_die "sha256sum or shasum is required to verify ARCHKDE_SHA256."
+        if [[ "${actual,,}" != "${ARCHKDE_SHA256,,}" ]]; then
+            bootstrap_die "Archive SHA256 does not match ARCHKDE_SHA256."
+        fi
+        printf '  [OK] Archive SHA256 matches ARCHKDE_SHA256.\n'
+    else
+        actual="$(bootstrap_file_sha256 "$archive" || true)"
+        if [[ -n "$actual" ]]; then
+            printf '  Archive SHA256: %s\n' "$actual"
+        fi
+        printf '  Set ARCHKDE_SHA256=<hash> to pin the archive hash as well.\n'
+    fi
 
     listing="$BOOTSTRAP_TMP/archive.list"
     if ! tar -tzf "$archive" >"$listing" 2>/dev/null; then
@@ -257,21 +299,6 @@ bootstrap_remote_installer() {
         fi
     fi
 
-    if [[ -n "${ARCHKDE_SHA256:-}" ]]; then
-        actual="$(bootstrap_file_sha256 "$archive")" ||
-            bootstrap_die "sha256sum or shasum is required to verify ARCHKDE_SHA256."
-        if [[ "${actual,,}" != "${ARCHKDE_SHA256,,}" ]]; then
-            bootstrap_die "Archive SHA256 does not match ARCHKDE_SHA256."
-        fi
-        printf '  [OK] Archive SHA256 matches ARCHKDE_SHA256.\n'
-    else
-        actual="$(bootstrap_file_sha256 "$archive" || true)"
-        if [[ -n "$actual" ]]; then
-            printf '  Archive SHA256: %s\n' "$actual"
-        fi
-        printf '  Set ARCHKDE_SHA256=<hash> to pin the archive hash as well.\n'
-    fi
-
     if ((persist)) && [[ -n "${HOME:-}" ]]; then
         persist_root="${XDG_DATA_HOME:-${HOME}/.local/share}/archkde-play/source"
         staging="${persist_root}.new.$$"
@@ -284,6 +311,7 @@ bootstrap_remote_installer() {
             rm -rf -- "$persist_root"
             if mv -- "$staging" "$persist_root"; then
                 root="$persist_root"
+                chmod 700 -- "$root" 2>/dev/null || true
                 printf '  Installer source saved to: %s\n' "$root"
             else
                 rm -rf -- "$staging"
@@ -422,13 +450,7 @@ if ((SELECTION_SET)) && [[ -z "${SELECTION//[[:space:]]/}" ]]; then
     die "--modules requires at least one module number."
 fi
 
-# Check this before creating any log or state files, so running with sudo does
-# not leave root-owned files behind.
-if ((EUID == 0)); then
-    printf 'Run this installer as a regular user, not root.\n' >&2
-    exit 1
-fi
-
+# Dry-run and check mode must not create log or state files.
 if ((DRY_RUN || CHECK_ONLY)); then
     export LOG_FILE="/dev/null"
     export LOG_TEE=0

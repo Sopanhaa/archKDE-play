@@ -22,6 +22,10 @@ bash archkde-install.sh
 
 Optional: inspect the entry script first with `less archkde-install.sh`.
 
+Run the download from a private directory such as your home directory, not a
+shared directory like `/tmp`, so another local user cannot replace the file
+while you inspect or run it.
+
 The entry script downloads the repository archive over HTTPS, verifies it
 against `SHA256SUMS`, and launches the installer.
 It does **not** pipe downloaded code directly into a shell.
@@ -73,10 +77,16 @@ cd archKDE-play
   ```bash
   ARCHKDE_REF=v1.2.3 bash archkde-install.sh
   ```
-  `ARCHKDE_SKIP_CHECKSUM=1` exists only for offline testing and is not
-  recommended.
+  `ARCHKDE_SKIP_CHECKSUM=1` exists only for local/offline testing and requires
+  `ARCHKDE_ALLOW_INSECURE_SOURCE=1`; it is refused for normal remote HTTPS
+  installs. Do not use it for real installations.
 
 If verification fails, delete the downloaded file and run the command again.
+
+Checksums protect against corrupted or mismatched downloads. They do not protect
+against a compromised GitHub account or repository, because the archive and
+manifest come from the same place. For higher assurance, pin a release tag with
+`ARCHKDE_REF` and optionally set `ARCHKDE_SHA256`.
 
 ---
 
@@ -222,7 +232,7 @@ the installer offers to enable it safely:
 - backs up `/etc/pacman.conf`;
 - only uncomments the `[multilib]` section;
 - validates the result before installing it;
-- refreshes packages with `pacman -Syu`.
+- runs a full system upgrade with `pacman -Syu` after you confirm.
 
 If you decline, the rest of the setup continues and Steam is skipped with a
 warning. You can enable multilib manually later, then rerun:
@@ -275,7 +285,7 @@ bash ~/.local/share/archkde-play/source/scripts/health-check.sh
 |---------|-----|
 | `curl` download fails | Check your internet connection and rerun the `curl` command. The URL uses HTTPS and should return a small Bash file. |
 | `Checksum verification failed` | The archive or checksum manifest was corrupted or changed. Delete `archkde-install.sh`, then download and run it again. |
-| `SHA256SUMS` cannot be downloaded | Retry. If you are testing a fork or a tag without a manifest, use the `git clone` method instead of `ARCHKDE_SKIP_CHECKSUM=1`. |
+| `SHA256SUMS` cannot be downloaded | Retry. If you are testing a fork or a tag without a manifest, use the `git clone` method. Do not disable checksum verification for a remote HTTPS install. |
 | Install stops with an error | Read the log path shown on screen (`~/.local/state/archkde-play/logs/`), fix the reported issue, then rerun the same command or the failed module, e.g. `./install.sh --modules 03`. Rerunning is safe. |
 | `pacman is locked` | Wait for another update or package manager to finish. Do not delete the lock unless you are sure no update is running. |
 | No internet / downloads fail | Reconnect, then rerun. Check with `ping archlinux.org`. |
@@ -314,6 +324,10 @@ Update official packages, Flatpak apps, optional AUR packages, and the project:
 The saved one-command source is not a Git checkout, so `update.sh` updates
 packages but skips the project Git pull. Rerun the download command to refresh
 the saved source.
+
+AUR packages are third-party PKGBUILDs. `update.sh` asks for a separate
+confirmation before updating them; use `--skip-aur` to skip AUR updates
+entirely.
 
 Rollback removes **only** configuration files created by this project whose
 contents are still unchanged:

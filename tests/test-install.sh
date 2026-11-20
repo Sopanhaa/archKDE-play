@@ -184,11 +184,39 @@ HoldPkg = pacman glibc
 #Include = /etc/pacman.d/mirrorlist
 EOF
     before="$(file_sha256 "$conf")"
-    (PACMAN_CONF="$conf" DRY_RUN=1 ensure_multilib >/dev/null)
+    (PACMAN_CONF="$conf" ARCHKDE_ALLOW_PACMAN_CONF_OVERRIDE=1 DRY_RUN=1 ensure_multilib >/dev/null)
     after="$(file_sha256 "$conf")"
     [[ -n "$before" && "$before" == "$after" ]]
 }
 assert "dry-run does not edit pacman.conf for multilib" multilib_dry_run_does_not_edit
+
+pacman_conf_override_requires_flag() {
+    (PACMAN_CONF=/tmp/not-a-real-pacman.conf pacman_conf_path)
+}
+assert_failure "PACMAN_CONF override is refused outside tests" pacman_conf_override_requires_flag
+
+pacman_conf_override_allowed_for_tests() {
+    [[ "$(PACMAN_CONF=/tmp/not-a-real-pacman.conf \
+        ARCHKDE_ALLOW_PACMAN_CONF_OVERRIDE=1 pacman_conf_path)" == "/tmp/not-a-real-pacman.conf" ]]
+}
+assert "PACMAN_CONF override works with the explicit test flag" pacman_conf_override_allowed_for_tests
+
+multilib_refuses_symlinked_config() {
+    local real="$tmp_dir/pacman-real.conf"
+    local link="$tmp_dir/pacman-link.conf"
+    local output
+    cat >"$real" <<'EOF'
+[options]
+HoldPkg = pacman glibc
+EOF
+    ln -s -- "$real" "$link"
+    if output="$(PACMAN_CONF="$link" ARCHKDE_ALLOW_PACMAN_CONF_OVERRIDE=1 \
+        ensure_multilib 2>&1)"; then
+        return 1
+    fi
+    [[ "$output" == *"symbolic link"* ]]
+}
+assert "multilib refuses a symlinked pacman.conf" multilib_refuses_symlinked_config
 
 package_install_skips_installed() (
     pacman() {
@@ -343,6 +371,25 @@ backup_exists() {
         find "$BACKUP_DIR" -type f -name existing-target | grep -q .
 }
 assert "conflicting configuration is backed up without overwrite" backup_exists
+
+printf 'symlink content\n' >"$tmp_dir/symlink-real"
+ln -s -- "$tmp_dir/symlink-real" "$tmp_dir/symlink-target"
+backup_file "$tmp_dir/symlink-target" symlink-target >/dev/null
+symlink_backup_is_regular() {
+    local backup
+    backup="$(find "$BACKUP_DIR" -type f -name symlink-target | tail -n1)"
+    [[ -n "$backup" && ! -L "$backup" && "$(<"$backup")" == "symlink content" ]]
+}
+assert "backups dereference symlinks instead of copying links" symlink_backup_is_regular
+
+printf 'real target\n' >"$tmp_dir/symlink-managed-real"
+ln -s -- "$tmp_dir/symlink-managed-real" "$tmp_dir/symlink-managed-target"
+ensure_managed_config "$tmp_dir/new-source" "$tmp_dir/symlink-managed-target" >/dev/null
+symlink_target_untouched() {
+    [[ -L "$tmp_dir/symlink-managed-target" &&
+        "$(<"$tmp_dir/symlink-managed-real")" == "real target" ]]
+}
+assert "managed configuration refuses symlink targets" symlink_target_untouched
 
 DRY_RUN=1
 ensure_managed_config "$tmp_dir/new-source" "$tmp_dir/dry-target" >/dev/null

@@ -40,7 +40,7 @@ mapfile -t files < <(
 
 tmp="$(mktemp)"
 trap 'rm -f -- "$tmp"' EXIT
-sha256sum "${files[@]}" >"$tmp"
+sha256sum -- "${files[@]}" >"$tmp"
 
 if ((check)); then
     if [[ ! -f "$TARGET" ]]; then

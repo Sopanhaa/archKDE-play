@@ -108,7 +108,7 @@ if ((DRY_RUN)); then
     log WARN "Dry run enabled; no files will be removed."
 else
     [[ -t 0 ]] || die "Rollback requires interactive confirmation."
-    read -r -p "Remove these files? [y/N] " answer
+    read -r -p "Remove these files? [y/N] " answer || answer=""
     [[ "$answer" =~ ^[Yy]$ ]] || die "Rollback cancelled."
     command -v sudo >/dev/null 2>&1 || die "sudo is required to remove system configuration."
     sudo -v || die "sudo authentication failed."
@@ -119,7 +119,8 @@ for target in "${removable[@]}"; do
 done
 
 if ((!DRY_RUN)); then
-    tmp_manifest="$(mktemp)"
+    tmp_manifest="$(mktemp)" || die "Could not create a temporary manifest."
+    trap 'rm -f -- "${tmp_manifest:-}"' EXIT
     while IFS='|' read -r kind target detail source; do
         [[ -n "${kind:-}" ]] || continue
         if [[ "$kind" == "created" && "${remove_entries[$target]:-0}" == "1" ]]; then

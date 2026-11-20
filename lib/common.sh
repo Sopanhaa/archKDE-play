@@ -444,7 +444,14 @@ install_available_packages() {
 }
 
 pacman_conf_path() {
-    printf '%s\n' "${PACMAN_CONF:-/etc/pacman.conf}"
+    if [[ -n "${PACMAN_CONF:-}" ]]; then
+        if [[ "${ARCHKDE_ALLOW_PACMAN_CONF_OVERRIDE:-0}" != "1" ]]; then
+            die "PACMAN_CONF is a test-only override. Refusing to use it in a real run."
+        fi
+        printf '%s\n' "$PACMAN_CONF"
+        return 0
+    fi
+    printf '/etc/pacman.conf\n'
 }
 
 multilib_enabled() {
@@ -528,13 +535,18 @@ ensure_multilib() {
         log WARN "Cannot read $conf; enable [multilib] manually to use Steam."
         return 1
     fi
+    if [[ -L "$conf" ]]; then
+        log WARN "$conf is a symbolic link; leaving it unchanged. Enable [multilib] manually to use Steam."
+        return 1
+    fi
     if [[ ! -t 0 ]]; then
         log WARN "[multilib] is disabled and no terminal is available to confirm enabling it."
         return 1
     fi
 
     printf '\nSteam needs 32-bit support from the [multilib] repository.\n'
-    read -r -p "Enable [multilib] in $conf now? [Y/n] " answer || answer="n"
+    printf 'Enabling it also runs a full system upgrade (pacman -Syu).\n'
+    read -r -p "Enable [multilib] and upgrade packages now? [Y/n] " answer || answer="n"
     case "${answer,,}" in
         ""|y|yes) ;;
         *)
@@ -729,7 +741,7 @@ backup_file() {
     stamp="$(date +%Y%m%d-%H%M%S)"
     backup="$BACKUP_DIR/$stamp/$label"
     if ((DRY_RUN)); then
-        run sudo cp -a -- "$target" "$backup"
+        run sudo cp -aL -- "$target" "$backup"
         log INFO "Dry run: would back up $target to $backup"
         return 0
     fi
@@ -740,7 +752,7 @@ backup_file() {
     # -n avoids an unexpected password prompt in non-interactive runs; the
     # installer authenticates sudo before any module starts, so this succeeds
     # there without prompting.
-    if ! sudo -n cp -a -- "$target" "$backup" 2>/dev/null; then
+    if ! sudo -n cp -aL -- "$target" "$backup" 2>/dev/null; then
         log WARN "Could not back up $target; it will be left untouched."
         return 1
     fi
@@ -756,6 +768,10 @@ ensure_managed_config() {
     local source_file="$1"
     local target_file="$2"
     local digest
+    if [[ -L "$target_file" ]]; then
+        log WARN "Target is a symbolic link; leaving it unchanged: $target_file"
+        return 0
+    fi
     if [[ -e "$target_file" ]]; then
         if cmp -s -- "$source_file" "$target_file"; then
             log INFO "Managed configuration already matches: $target_file"
@@ -767,11 +783,11 @@ ensure_managed_config() {
         return 0
     fi
     if ((DRY_RUN)); then
-        run sudo install -D -m 0644 "$source_file" "$target_file"
+        run sudo install -D -m 0644 -- "$source_file" "$target_file"
         log INFO "Dry run: would install managed configuration: $target_file"
         return 0
     fi
-    sudo_run install -D -m 0644 "$source_file" "$target_file"
+    sudo_run install -D -m 0644 -- "$source_file" "$target_file"
     digest="$(file_sha256 "$target_file")"
     record_change "created" "$target_file" "$digest" "$source_file"
     log INFO "Installed managed configuration: $target_file"

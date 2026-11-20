@@ -139,6 +139,18 @@ bootstrap_rejects_incomplete_manifest() {
 }
 assert_ok "downloaded entry point rejects a manifest missing required files" bootstrap_rejects_incomplete_manifest
 
+bootstrap_rejects_manifest_path_traversal() {
+    local bad_manifest="$tmp_dir/path-SHA256SUMS"
+    local output
+    cp -- "$ROOT_DIR/SHA256SUMS" "$bad_manifest"
+    printf '%064d  ../../etc/passwd\n' 0 >>"$bad_manifest"
+    if output="$(run_entry "$bad_manifest" --help 2>&1)"; then
+        return 1
+    fi
+    [[ "$output" == *"SHA256SUMS contains an unsafe path"* ]]
+}
+assert_ok "downloaded entry point rejects manifest path traversal" bootstrap_rejects_manifest_path_traversal
+
 bootstrap_rejects_modified_entry_script() {
     local tampered="$tmp_dir/tampered-entry.sh"
     local output
@@ -153,6 +165,27 @@ bootstrap_rejects_modified_entry_script() {
     [[ "$output" == *"entry script does not match"* ]]
 }
 assert_ok "downloaded entry point rejects a modified entry script" bootstrap_rejects_modified_entry_script
+
+bootstrap_rejects_unsafe_ref() {
+    local output
+    if output="$(ARCHKDE_REF="../evil" run_entry "$ROOT_DIR/SHA256SUMS" --help 2>&1)"; then
+        return 1
+    fi
+    [[ "$output" == *"ARCHKDE_REF"* ]]
+}
+assert_ok "downloaded entry point rejects an unsafe ARCHKDE_REF" bootstrap_rejects_unsafe_ref
+
+bootstrap_refuses_skip_without_test_flag() {
+    local output
+    if output="$(ARCHKDE_SKIP_CHECKSUM=1 \
+        ARCHKDE_ARCHIVE_URL="file://$archive" \
+        ARCHKDE_CHECKSUM_URL="file://$ROOT_DIR/SHA256SUMS" \
+        bash "$entry_dir/install.sh" --help 2>&1)"; then
+        return 1
+    fi
+    [[ "$output" == *"Refusing to skip checksum verification"* ]]
+}
+assert_ok "downloaded entry point refuses remote checksum bypass" bootstrap_refuses_skip_without_test_flag
 
 bootstrap_accepts_pinned_archive_hash() {
     local archive_sha

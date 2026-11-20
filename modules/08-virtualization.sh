@@ -10,6 +10,8 @@ if ! grep -Eqw 'vmx|svm' /proc/cpuinfo; then
     exit 0
 fi
 
+log WARN "The libvirt group grants powerful virtual-machine control; only add users you trust."
+
 install_available_packages "${VIRTUALIZATION_PACKAGES[@]}"
 enable_service libvirtd.service || true
 target_user="$(id -un)"

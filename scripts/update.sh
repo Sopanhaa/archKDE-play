@@ -54,6 +54,7 @@ if ((DRY_RUN)); then
 else
     [[ -t 0 ]] || die "Updates require interactive confirmation; run this script in a terminal."
     printf 'This will update system packages, Flatpak applications, optional AUR packages, and the project repository.\n'
+    printf 'AUR updates are optional and require a second confirmation.\n'
     printf 'Package managers will ask for any required confirmations; no automatic yes flags are used.\n'
     read -r -p "Continue? [y/N] " answer || answer=""
     [[ "$answer" =~ ^[Yy]$ ]] || die "Update cancelled."
@@ -73,14 +74,33 @@ fi
 
 if ((SKIP_AUR)); then
     log INFO "Skipping AUR updates (--skip-aur)."
-elif command -v yay >/dev/null 2>&1; then
-    log INFO "Updating AUR packages with yay (as the current user)."
-    run yay -Sua
-elif command -v paru >/dev/null 2>&1; then
-    log INFO "Updating AUR packages with paru (as the current user)."
-    run paru -Sua
 else
-    log INFO "No supported AUR helper found; skipping AUR updates."
+    aur_helper=""
+    if command -v yay >/dev/null 2>&1; then
+        aur_helper="$(command -v yay)"
+    elif command -v paru >/dev/null 2>&1; then
+        aur_helper="$(command -v paru)"
+    fi
+    if [[ -n "$aur_helper" && "$aur_helper" != /* ]]; then
+        log WARN "AUR helper is not an absolute executable path; skipping AUR updates."
+        aur_helper=""
+    fi
+
+    if [[ -z "$aur_helper" ]]; then
+        log INFO "No supported AUR helper found; skipping AUR updates."
+    elif ((DRY_RUN)); then
+        log INFO "Dry run: would update AUR packages with $(basename -- "$aur_helper")."
+        run "$aur_helper" -Sua
+    else
+        printf '\nAUR packages are third-party PKGBUILDs and may run code on your machine.\n'
+        read -r -p "Update AUR packages with $(basename -- "$aur_helper")? [y/N] " aur_answer || aur_answer=""
+        if [[ "$aur_answer" =~ ^[Yy]$ ]]; then
+            log INFO "Updating AUR packages with $(basename -- "$aur_helper") (as the current user)."
+            run "$aur_helper" -Sua
+        else
+            log INFO "Skipping AUR updates (not confirmed)."
+        fi
+    fi
 fi
 
 if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
