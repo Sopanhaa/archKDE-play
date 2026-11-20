@@ -21,6 +21,8 @@ DRY_RUN=0
 SELECTION=""
 SELECTION_SET=0
 FULL_INSTALL=0
+PROFILE=""
+PROFILE_SET=0
 CHECK_ONLY=0
 CURRENT_MODULE=""
 CURRENT_MODULE_LABEL=""
@@ -30,9 +32,17 @@ usage() {
     cat <<'EOF'
 Usage: ./install.sh [options]
 
+Recommended:
+  ./install.sh                  Show a simple menu (press Enter for recommended).
+  ./install.sh --recommended    Install the recommended gaming setup.
+  ./install.sh --gaming         Install gaming tools only (KDE already installed).
+  ./install.sh --dry-run        Preview everything without changing anything.
+
 Options:
   --dry-run       Preview every action without changing the system.
-  --full          Install all modules without showing the menu.
+  --full          Install all modules, including optional virtualization.
+  --recommended   Install the recommended gaming setup (modules 01-07).
+  --gaming        Install gaming essentials only (modules 03, 05, 06, 07).
   --modules LIST  Install selected modules (e.g. 03,05,06 or 3-5).
   --check         Run preflight checks only and exit.
   --list-modules  Show module numbers, titles, and descriptions.
@@ -41,8 +51,8 @@ Options:
   --no-color      Disable coloured terminal output.
   --help, -h      Show this help.
 
-Interactive use:
-  Run ./install.sh and enter module numbers such as:
+Advanced interactive use:
+  Choose option 3 in the menu, then enter module numbers such as:
     03 05 06        specific modules
     03-06           a range
     all or 0        every module
@@ -64,7 +74,9 @@ project_version() {
 while (($#)); do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
-        --full) FULL_INSTALL=1 ;;
+        --full|--all) FULL_INSTALL=1 ;;
+        --recommended|--recommend) PROFILE="recommended"; PROFILE_SET=1 ;;
+        --gaming|--gaming-only) PROFILE="gaming"; PROFILE_SET=1 ;;
         --modules)
             (($# >= 2)) || die "--modules requires a comma-separated module list."
             SELECTION="$2"
@@ -86,8 +98,9 @@ while (($#)); do
     shift
 done
 
-if ((FULL_INSTALL && SELECTION_SET)); then
-    die "Use either --full or --modules, not both."
+selected_modes=$((FULL_INSTALL + PROFILE_SET + SELECTION_SET))
+if ((selected_modes > 1)); then
+    die "Use only one of --full, --recommended, --gaming, or --modules."
 fi
 if ((SELECTION_SET)) && [[ -z "${SELECTION//[[:space:]]/}" ]]; then
     die "--modules requires at least one module number."
@@ -110,6 +123,14 @@ else
     exec > >(tee -a "$LOG_FILE") 2>&1
 fi
 
+print_common_fixes() {
+    printf '  Common fixes:\n'
+    printf '    - Check your internet connection and try again.\n'
+    printf '    - If pacman is locked, wait for other updates to finish.\n'
+    printf '    - If a package is missing, run: sudo pacman -Syu\n'
+    printf '    - For NVIDIA with Secure Boot, sign your kernel modules first.\n'
+}
+
 on_error() {
     local status="$1"
     local line="$2"
@@ -130,6 +151,7 @@ on_error() {
     fi
     log ERROR "Review project-managed changes with: ./scripts/rollback.sh --dry-run"
     log ERROR "Fix the problem above, then rerun the same command. Completed modules are safe to rerun."
+    print_common_fixes
     exit "$status"
 }
 
@@ -159,15 +181,27 @@ fi
 
 show_module_menu() {
     local i
-    section "Choose installation modules"
-    printf '  0) All modules (recommended for a new gaming setup)\n\n'
+    section "Custom module selection"
+    printf '  0) All modules\n\n'
     for i in "${!MODULE_NUMBERS[@]}"; do
         printf '  %s) %s\n' "${MODULE_NUMBERS[$i]}" "${MODULE_TITLES[$i]}"
         printf '      %s\n' "${MODULE_DESCRIPTIONS[$i]}"
     done
-    printf '\n  q) Quit without changing anything\n'
+    printf '\n  q) Go back\n'
     printf '\nEnter numbers separated by spaces or commas (for example: 03 05 06),\n'
     printf 'a range such as 03-06, or "all".\n'
+}
+
+show_main_menu() {
+    section "Choose a setup"
+    printf '  1) %s  (recommended)\n' "$(profile_title recommended)"
+    printf '     %s\n\n' "$(profile_description recommended)"
+    printf '  2) %s\n' "$(profile_title gaming)"
+    printf '     %s\n\n' "$(profile_description gaming)"
+    printf '  3) Custom module selection (advanced)\n'
+    printf '     Pick exactly what to install, or skip optional parts.\n\n'
+    printf '  q) Quit without changing anything\n'
+    printf '\nPress Enter for the recommended setup.\n'
 }
 
 show_selection() {
@@ -176,15 +210,23 @@ show_selection() {
     for number in $SELECTED_MODULES; do
         printf '  %s  %s\n' "$number" "$(module_title "$number")"
     done
-    printf '\nModules run in the order shown; select 01 as well if you want a full system update first.\n'
+    if ((DRY_RUN)); then
+        printf '\nDry run: these modules would run, but nothing will be changed.\n'
+    else
+        printf '\nThe installer asks for confirmation before making changes.\n'
+    fi
+    printf 'It will never format disks, edit bootloader entries, or reboot automatically.\n'
+    if [[ " $SELECTED_MODULES " != *" 08 "* ]]; then
+        printf 'Optional virtualization (08) is not included; add it later with --modules 08.\n'
+    fi
 }
 
-interactive_select() {
+interactive_select_modules() {
     local answer normalized
     show_module_menu
 
     while true; do
-        printf '\nSelect modules: '
+        printf '\nSelect modules (or q to go back): '
         if ! IFS= read -r answer; then
             printf '\n'
             return 1
@@ -193,7 +235,7 @@ interactive_select() {
         answer="${answer%"${answer##*[![:space:]]}"}"
 
         case "${answer,,}" in
-            "") ui_warn "Please enter a selection, or q to quit."; continue ;;
+            "") ui_warn "Please enter a selection, or q to go back."; continue ;;
             q|quit|exit) return 1 ;;
             h|help|\?) show_module_menu; continue ;;
         esac
@@ -204,6 +246,78 @@ interactive_select() {
         fi
         ui_warn "That selection was not understood. Use 01-08, a range like 03-05, or all."
     done
+}
+
+interactive_select() {
+    local answer normalized
+    show_main_menu
+
+    while true; do
+        printf '\nChoice [1]: '
+        if ! IFS= read -r answer; then
+            printf '\n'
+            return 1
+        fi
+        answer="${answer#"${answer%%[![:space:]]*}"}"
+        answer="${answer%"${answer##*[![:space:]]}"}"
+
+        case "${answer,,}" in
+            ""|1|recommended|recommend)
+                SELECTED_MODULES="$RECOMMENDED_MODULES"
+                return 0
+                ;;
+            2|gaming|essentials)
+                SELECTED_MODULES="$GAMING_MODULES"
+                return 0
+                ;;
+            3|custom|advanced)
+                if interactive_select_modules; then
+                    return 0
+                fi
+                return 1
+                ;;
+            q|quit|exit)
+                return 1
+                ;;
+            h|help|\?)
+                show_main_menu
+                continue
+                ;;
+        esac
+
+        # Keep the old power-user behaviour: typing module numbers still works.
+        if normalized="$(parse_module_selection "$answer")"; then
+            SELECTED_MODULES="$normalized"
+            return 0
+        fi
+        ui_warn "Enter 1, 2, 3, or q. Advanced users can also type module numbers such as 03 05."
+    done
+}
+
+show_recommendation() {
+    local info vendors
+    info="$(detect_system_gpu_info)"
+    vendors="$(detect_gpu_vendors "$info")"
+
+    section "Recommendation"
+    if gpu_has_vendor nvidia "$vendors"; then
+        printf '  NVIDIA graphics detected: the driver module chooses a matching NVIDIA package.\n'
+    elif gpu_has_vendor amd "$vendors"; then
+        printf '  AMD graphics detected: Mesa and Vulkan drivers will be installed.\n'
+    elif gpu_has_vendor intel "$vendors"; then
+        printf '  Intel graphics detected: Mesa and Intel Vulkan drivers will be installed.\n'
+    fi
+    if ((!SELECTION_SET && !FULL_INSTALL && !PROFILE_SET)); then
+        if package_installed plasma-desktop 2>/dev/null; then
+            printf '  KDE Plasma is already installed: option 2 focuses on drivers and gaming tools.\n'
+        fi
+    fi
+    if ! multilib_enabled; then
+        printf '  [multilib] is disabled: the installer can enable it for Steam when needed.\n'
+    fi
+    if ((!SELECTION_SET && !FULL_INSTALL && !PROFILE_SET)); then
+        printf '  Press Enter at the menu to use the recommended gaming setup.\n'
+    fi
 }
 
 choose_modules() {
@@ -217,8 +331,15 @@ choose_modules() {
         return 0
     fi
 
+    if ((PROFILE_SET)); then
+        SELECTED_MODULES="$(profile_modules "$PROFILE")" || {
+            die "Unknown setup profile: $PROFILE"
+        }
+        return 0
+    fi
+
     if [[ ! -t 0 ]]; then
-        die "Interactive input is unavailable. Use --full, --modules LIST, or --check."
+        die "Interactive input is unavailable. Use --recommended, --gaming, --full, --modules LIST, or --check."
     fi
     interactive_select
 }
@@ -240,6 +361,8 @@ if ((CHECK_ONLY)); then
     log INFO "Preflight checks finished. No packages or configuration files were changed."
     exit 0
 fi
+
+show_recommendation
 
 if ! choose_modules; then
     log INFO "Installation cancelled. Nothing was changed."
@@ -273,11 +396,23 @@ else
     sudo -v || die "sudo authentication failed; nothing was changed."
 fi
 
+# Steam needs [multilib]. Enable it before any module runs so the GPU module
+# also installs matching 32-bit graphics libraries.
+if [[ " $SELECTED_MODULES " == *" 05 "* ]]; then
+    if ! ensure_multilib; then
+        log WARN "Continuing without [multilib]; Steam and some 32-bit libraries may be skipped."
+    fi
+fi
+
 module_index=0
 for number in "${selected_module_numbers[@]}"; do
     module_index=$((module_index + 1))
     CURRENT_MODULE="$number"
     CURRENT_MODULE_LABEL="$(module_title "$number")"
+
+    if ((!DRY_RUN)) && ! sudo -v; then
+        die "sudo authentication failed; rerun after fixing your sudo access."
+    fi
 
     section "Module $module_index of $module_count: $CURRENT_MODULE_LABEL"
     log INFO "Starting module $number ($module_index/$module_count)."
@@ -294,6 +429,7 @@ for number in "${selected_module_numbers[@]}"; do
         log ERROR "Module $number ($CURRENT_MODULE_LABEL) failed with exit status $status."
         log ERROR "No changes were rolled back automatically. Review the log: $LOG_FILE"
         log ERROR "Fix the reported problem, then rerun this module with: ./install.sh --modules $number"
+        print_common_fixes
         exit "$status"
     fi
 done
@@ -318,8 +454,15 @@ if ((!DRY_RUN)); then
     printf '  Review rollback with: ./scripts/rollback.sh --dry-run\n'
 fi
 printf '\nNext steps:\n'
-printf '  - Reboot when convenient so the new kernel and GPU drivers load.\n'
-printf '  - Sign out and back in if this setup added you to the libvirt group.\n'
+if [[ " $SELECTED_MODULES " == *" 02 "* || " $SELECTED_MODULES " == *" 03 "* ]]; then
+    printf '  - Reboot when convenient so the new kernel and GPU drivers load.\n'
+fi
+if [[ " $SELECTED_MODULES " == *" 08 "* ]]; then
+    printf '  - Sign out and back in if this setup added you to the libvirt group.\n'
+fi
 printf '  - Run ./scripts/health-check.sh to verify the installation.\n'
-printf '  - Check your bootloader menu before rebooting to use linux-zen.\n'
+if [[ " $SELECTED_MODULES " == *" 02 "* ]]; then
+    printf '  - Check your bootloader menu before rebooting to use linux-zen.\n'
+fi
+printf '  - Launch Steam from the application menu, then enable Steam Play in Settings.\n'
 printf '\nThis installer did not reboot your computer or modify boot entries.\n'

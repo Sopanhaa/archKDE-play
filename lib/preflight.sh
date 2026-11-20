@@ -108,7 +108,7 @@ preflight_check_pacman() {
     if multilib_enabled; then
         ui_ok "[multilib] is enabled (32-bit games and drivers are supported)."
     else
-        preflight_warn "[multilib] is disabled; Steam and 32-bit graphics libraries will be skipped."
+        preflight_warn "[multilib] is disabled; the installer can enable it for Steam after you confirm."
     fi
 }
 

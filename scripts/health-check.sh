@@ -173,6 +173,23 @@ if command -v wine >/dev/null 2>&1; then
 else
     warn "Wine is not installed"
 fi
+if command -v heroic >/dev/null 2>&1 ||
+    flatpak info com.heroicgameslauncher.hgl >/dev/null 2>&1; then
+    pass "Heroic Games Launcher is installed"
+else
+    warn "Heroic Games Launcher is not installed"
+fi
+if command -v protonup-qt >/dev/null 2>&1 ||
+    flatpak info net.davidotek.pupgui2 >/dev/null 2>&1; then
+    pass "ProtonUp-Qt is installed"
+else
+    warn "ProtonUp-Qt is not installed"
+fi
+if command -v gamescope >/dev/null 2>&1; then
+    pass "Gamescope is installed"
+else
+    warn "Gamescope is not installed"
+fi
 if multilib_enabled; then
     pass "[multilib] is enabled for 32-bit games"
 else
@@ -180,9 +197,12 @@ else
 fi
 
 section "Desktop, services, and Flatpak"
-services=(NetworkManager bluetooth sddm fstrim.timer)
+services=(NetworkManager bluetooth fstrim.timer)
 if package_installed libvirt; then
     services+=(libvirtd)
+fi
+if package_installed power-profiles-daemon; then
+    services+=(power-profiles-daemon)
 fi
 for service in "${services[@]}"; do
     if systemctl is-enabled --quiet "$service" 2>/dev/null; then
@@ -191,6 +211,37 @@ for service in "${services[@]}"; do
         warn "$service is not enabled"
     fi
 done
+
+display_manager=""
+for dm in sddm gdm lightdm greetd ly; do
+    if systemctl is-enabled --quiet "$dm" 2>/dev/null; then
+        display_manager="$dm"
+        break
+    fi
+done
+if [[ -n "$display_manager" ]]; then
+    pass "Display manager $display_manager is enabled"
+else
+    warn "No display manager is enabled"
+fi
+
+if package_installed virt-manager; then
+    pass "Virtual Machine Manager is installed"
+else
+    log INFO "Optional: Virtual Machine Manager is not installed (module 08 adds it)."
+fi
+
+if [[ -e /etc/modprobe.d/archkde-play-nvidia.conf ||
+    -e /etc/modprobe.d/arch-extreme-gaming-nvidia.conf ]]; then
+    if grep -Eq '^[[:space:]]*options[[:space:]]+nvidia_drm[[:space:]]+modeset=1' \
+        /etc/modprobe.d/archkde-play-nvidia.conf 2>/dev/null ||
+        grep -Eq '^[[:space:]]*options[[:space:]]+nvidia_drm[[:space:]]+modeset=1' \
+            /etc/modprobe.d/arch-extreme-gaming-nvidia.conf 2>/dev/null; then
+        pass "NVIDIA DRM modesetting configuration is present"
+    else
+        warn "An NVIDIA configuration file exists but modeset=1 was not found"
+    fi
+fi
 
 if command -v flatpak >/dev/null 2>&1; then
     pass "Flatpak is installed"

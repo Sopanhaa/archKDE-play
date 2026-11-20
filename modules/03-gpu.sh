@@ -27,7 +27,7 @@ elif ((HYBRID)); then
     log INFO "Hybrid graphics detected. The integrated GPU remains enabled for the desktop; use your desktop's per-application GPU option for the discrete GPU."
 fi
 
-packages=(mesa mesa-utils vulkan-tools)
+packages=(mesa mesa-utils vulkan-tools linux-firmware)
 
 if multilib_enabled; then
     packages+=(lib32-mesa)
@@ -115,8 +115,14 @@ log INFO "Integrated graphics will remain enabled; no PRIME or GPU power setting
 install_available_packages "${packages[@]}"
 
 if ((nvidia_driver_selected)); then
-    ensure_managed_config "$ROOT_DIR/config/nvidia-drm.conf" /etc/modprobe.d/arch-extreme-gaming-nvidia.conf
-    log INFO "NVIDIA DRM modesetting is configured through the project-managed modprobe file."
+    nvidia_config="/etc/modprobe.d/archkde-play-nvidia.conf"
+    legacy_nvidia_config="/etc/modprobe.d/arch-extreme-gaming-nvidia.conf"
+    if [[ -e "$legacy_nvidia_config" ]]; then
+        log INFO "Existing project NVIDIA configuration found; keeping $legacy_nvidia_config unchanged."
+    else
+        ensure_managed_config "$ROOT_DIR/config/nvidia-drm.conf" "$nvidia_config"
+        log INFO "NVIDIA DRM modesetting is configured through the project-managed modprobe file."
+    fi
 fi
 
 log INFO "GPU setup finished. Reboot before testing games or running vulkaninfo."

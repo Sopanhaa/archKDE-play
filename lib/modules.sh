@@ -27,6 +27,40 @@ MODULE_DESCRIPTIONS=(
 )
 ALL_MODULES="${MODULE_NUMBERS[*]}"
 
+# Beginner-friendly setup profiles. The recommended profile covers a complete
+# gaming setup but leaves optional virtualization out; --full still installs
+# every module for users who want it.
+RECOMMENDED_MODULES="01 02 03 04 05 06 07"
+GAMING_MODULES="03 05 06 07"
+
+profile_title() {
+    case "${1:-}" in
+        recommended) printf 'Recommended gaming setup' ;;
+        gaming) printf 'Gaming essentials (KDE already installed)' ;;
+        *) return 1 ;;
+    esac
+}
+
+profile_description() {
+    case "${1:-}" in
+        recommended)
+            printf 'System update, Zen kernel, drivers, KDE, gaming tools, Flatpak, and safe performance setup.'
+            ;;
+        gaming)
+            printf 'Drivers, Steam, Lutris, Heroic, Wine, GameMode, MangoHud, Flatpak, and safe performance setup.'
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+profile_modules() {
+    case "${1:-}" in
+        recommended) printf '%s' "$RECOMMENDED_MODULES" ;;
+        gaming) printf '%s' "$GAMING_MODULES" ;;
+        *) return 1 ;;
+    esac
+}
+
 module_title() {
     local number="$1"
     local i

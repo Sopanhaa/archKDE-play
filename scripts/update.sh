@@ -5,6 +5,7 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/lib/common.sh"
 
 DRY_RUN=0
+SKIP_AUR=0
 
 usage() {
     cat <<'EOF'
@@ -19,9 +20,6 @@ Without --dry-run, this updates official packages, Flatpak applications,
 optional AUR packages, and the project repository (fast-forward only).
 EOF
 }
-
-DRY_RUN=0
-SKIP_AUR=0
 
 while (($#)); do
     case "$1" in
@@ -57,10 +55,10 @@ else
     [[ -t 0 ]] || die "Updates require interactive confirmation; run this script in a terminal."
     printf 'This will update system packages, Flatpak applications, optional AUR packages, and the project repository.\n'
     printf 'Package managers will ask for any required confirmations; no automatic yes flags are used.\n'
-    read -r -p "Continue? [y/N] " answer
+    read -r -p "Continue? [y/N] " answer || answer=""
     [[ "$answer" =~ ^[Yy]$ ]] || die "Update cancelled."
     command -v sudo >/dev/null 2>&1 || die "sudo is required for system package updates."
-    sudo -v
+    sudo -v || die "sudo authentication failed; nothing was updated."
 fi
 
 log INFO "Updating official Arch packages."

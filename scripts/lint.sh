@@ -26,7 +26,10 @@ else
 fi
 
 printf 'Running the test suite.\n'
-bash "$ROOT_DIR/tests/test-install.sh" || status=1
+for test_file in "$ROOT_DIR"/tests/test-*.sh; do
+    printf '  %s\n' "$(basename -- "$test_file")"
+    bash "$test_file" || status=1
+done
 
 if ((status == 0)); then
     printf 'Lint passed.\n'

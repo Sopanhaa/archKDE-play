@@ -11,7 +11,7 @@ if ! grep -Eqw 'vmx|svm' /proc/cpuinfo; then
 fi
 
 install_available_packages "${VIRTUALIZATION_PACKAGES[@]}"
-sudo_run systemctl enable --now libvirtd.service
+enable_service libvirtd.service || true
 target_user="$(id -un)"
 if ((DRY_RUN)) || getent group libvirt >/dev/null 2>&1; then
     if ((DRY_RUN)); then
@@ -25,3 +25,4 @@ if ((DRY_RUN)) || getent group libvirt >/dev/null 2>&1; then
 else
     log WARN "The libvirt group was not found after package installation; check the libvirt package setup."
 fi
+log INFO "Open Virtual Machine Manager to create your first virtual machine."

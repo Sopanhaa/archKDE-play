@@ -17,7 +17,7 @@ easy to review.
 git clone https://github.com/Sopanhaa/archKDE-play.git
 cd archKDE-play
 ./install.sh --check
-./install.sh --dry-run --full
+./install.sh --dry-run --recommended
 ```
 
 The last two commands are read-only checks.
@@ -26,12 +26,12 @@ The last two commands are read-only checks.
 
 ```bash
 bash scripts/lint.sh
-bash tests/test-install.sh
 ```
 
-`scripts/lint.sh` runs `bash -n`, ShellCheck when available, and the test suite.
-If you change installation behavior, also run the affected modules with
-`--dry-run` on an Arch system.
+`scripts/lint.sh` runs `bash -n`, ShellCheck when available, the unit tests in
+`tests/test-install.sh`, and the mocked module dry-run tests in
+`tests/test-dry-run-modules.sh`. If you change installation behavior, also run
+the affected modules with `--dry-run` on an Arch system.
 
 ## Code style
 

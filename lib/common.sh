@@ -15,6 +15,7 @@ BACKUP_DIR="${BACKUP_DIR:-$STATE_DIR/backups}"
 DRY_RUN="${DRY_RUN:-0}"
 LOG_TEE="${LOG_TEE:-0}"
 SETUP_QUIET="${SETUP_QUIET:-0}"
+MULTILIB_PREVIEW_ENABLED="${MULTILIB_PREVIEW_ENABLED:-0}"
 
 # Colour is only used on a real terminal. install.sh sets SETUP_FORCE_COLOR
 # before it redirects output through tee so interactive output stays readable.
@@ -361,21 +362,54 @@ package_installed() {
 
 install_available_packages() {
     local package
-    local -a valid=()
+    local -a unique=()
     local -a available=()
     local -a missing=()
     local -a invalid=()
+    local -a to_install=()
+    local -a already=()
+    local -A seen=()
+
     for package in "$@"; do
-        if validate_package_name "$package"; then
-            valid+=("$package")
-        else
+        if ! validate_package_name "$package"; then
             invalid+=("$package")
+        elif [[ -z "${seen[$package]:-}" ]]; then
+            seen[$package]=1
+            unique+=("$package")
         fi
     done
-    if ((${#valid[@]})) && packages_available_batch "${valid[@]}"; then
-        available=("${valid[@]}")
+
+    if ((${#invalid[@]})); then
+        log WARN "Invalid package names (skipped): ${invalid[*]}"
+    fi
+    if ((${#unique[@]} == 0)); then
+        log WARN "No valid packages were requested; nothing was installed."
+        return 0
+    fi
+
+    if ((!DRY_RUN)); then
+        local -a candidates=()
+        for package in "${unique[@]}"; do
+            if package_installed "$package"; then
+                already+=("$package")
+            else
+                candidates+=("$package")
+            fi
+        done
+        unique=("${candidates[@]}")
+        if ((${#already[@]})); then
+            log INFO "Already installed (skipped): ${already[*]}"
+        fi
+        if ((${#unique[@]} == 0)); then
+            log INFO "All requested packages are already installed; nothing to do."
+            return 0
+        fi
+    fi
+
+    if ((${#unique[@]})) && packages_available_batch "${unique[@]}"; then
+        available=("${unique[@]}")
     else
-        for package in "${valid[@]}"; do
+        for package in "${unique[@]}"; do
             if package_available "$package"; then
                 available+=("$package")
             else
@@ -383,40 +417,279 @@ install_available_packages() {
             fi
         done
     fi
-    if ((${#invalid[@]})); then
-        log WARN "Invalid package names (skipped): ${invalid[*]}"
-    fi
+
     if ((${#missing[@]})); then
         log WARN "Unavailable packages (skipped): ${missing[*]}"
         log WARN "If these packages should exist, refresh the package database with: sudo pacman -Syu"
     fi
-    if ((${#available[@]})); then
-        log INFO "Installing ${#available[@]} package(s): ${available[*]}"
-        sudo_run pacman -S --needed -- "${available[@]}"
-        if ((!DRY_RUN)); then
-            local -a not_installed=()
-            for package in "${available[@]}"; do
-                package_installed "$package" || not_installed+=("$package")
-            done
-            if ((${#not_installed[@]})); then
-                log WARN "Requested packages that are still missing: ${not_installed[*]}"
-            else
-                log INFO "All requested packages are installed."
-            fi
-        fi
-    else
+    if ((${#available[@]} == 0)); then
         log WARN "No requested packages are available; nothing was installed."
+        return 0
+    fi
+
+    to_install=("${available[@]}")
+    log INFO "Installing ${#to_install[@]} package(s): ${to_install[*]}"
+    sudo_run pacman -S --needed -- "${to_install[@]}"
+    if ((!DRY_RUN)); then
+        local -a not_installed=()
+        for package in "${to_install[@]}"; do
+            package_installed "$package" || not_installed+=("$package")
+        done
+        if ((${#not_installed[@]})); then
+            log WARN "Requested packages that are still missing: ${not_installed[*]}"
+        else
+            log INFO "All requested packages are installed."
+        fi
     fi
 }
 
+pacman_conf_path() {
+    printf '%s\n' "${PACMAN_CONF:-/etc/pacman.conf}"
+}
+
 multilib_enabled() {
-    [[ -r /etc/pacman.conf ]] || return 1
+    local conf
+    # In a dry run, a preview selection assumes the offered [multilib] change
+    # will be accepted, so later modules show the 32-bit packages too.
+    if ((DRY_RUN)) && [[ "${MULTILIB_PREVIEW_ENABLED:-0}" == "1" ]]; then
+        return 0
+    fi
+    conf="$(pacman_conf_path)"
+    [[ -r "$conf" ]] || return 1
     awk '
-        /^\[multilib\][[:space:]]*$/ { in_multilib=1; next }
-        /^\[[^]]+\][[:space:]]*$/ { in_multilib=0 }
+        /^[[:space:]]*\[multilib\][[:space:]]*$/ { in_multilib=1; next }
+        /^[[:space:]]*\[[^]]+\][[:space:]]*$/ { in_multilib=0 }
         in_multilib && /^[[:space:]]*Include[[:space:]]*=/ { found=1 }
         END { exit !found }
-    ' /etc/pacman.conf
+    ' "$conf"
+}
+
+# Print a pacman.conf with the [multilib] section enabled. The input file is
+# never modified, so the result can be validated before it is installed.
+render_multilib_enabled_pacman_conf() {
+    local conf="${1:-}"
+    [[ -r "$conf" ]] || return 1
+    awk '
+        /^[[:space:]]*#?[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+            section = $0
+            gsub(/[[:space:]]/, "", section)
+            if (section == "#[multilib]") {
+                sub(/^[[:space:]]*#[[:space:]]*/, "")
+                in_multilib = 1
+                found = 1
+                print
+                next
+            }
+            in_multilib = (section == "[multilib]")
+            if (in_multilib) found = 1
+            print
+            next
+        }
+        in_multilib && /^[[:space:]]*#[[:space:]]*Include[[:space:]]*=/ {
+            sub(/^[[:space:]]*#[[:space:]]*/, "")
+            print
+            next
+        }
+        { print }
+        END { exit !found }
+    ' "$conf"
+}
+
+# Confirm that a rendered pacman.conf has an active [multilib] Include line.
+multilib_config_has_include() {
+    local conf="${1:-}"
+    [[ -r "$conf" ]] || return 1
+    awk '
+        /^[[:space:]]*\[multilib\][[:space:]]*$/ { in_multilib=1; next }
+        /^[[:space:]]*\[[^]]+\][[:space:]]*$/ { in_multilib=0 }
+        in_multilib && /^[[:space:]]*Include[[:space:]]*=/ { found=1 }
+        END { exit !found }
+    ' "$conf"
+}
+
+# Ask before enabling [multilib], which Steam needs for 32-bit support.
+# Returns 1 when the user declines or the change cannot be made safely.
+ensure_multilib() {
+    local conf tmp answer
+    conf="$(pacman_conf_path)"
+
+    if multilib_enabled; then
+        log INFO "[multilib] is already enabled."
+        return 0
+    fi
+
+    if ((DRY_RUN)); then
+        export MULTILIB_PREVIEW_ENABLED=1
+        log INFO "Dry run: would enable [multilib] in $conf and refresh package databases."
+        return 0
+    fi
+
+    if [[ ! -r "$conf" ]]; then
+        log WARN "Cannot read $conf; enable [multilib] manually to use Steam."
+        return 1
+    fi
+    if [[ ! -t 0 ]]; then
+        log WARN "[multilib] is disabled and no terminal is available to confirm enabling it."
+        return 1
+    fi
+
+    printf '\nSteam needs 32-bit support from the [multilib] repository.\n'
+    read -r -p "Enable [multilib] in $conf now? [Y/n] " answer || answer="n"
+    case "${answer,,}" in
+        ""|y|yes) ;;
+        *)
+            log WARN "Leaving [multilib] disabled; Steam and 32-bit libraries may be skipped."
+            return 1
+            ;;
+    esac
+
+    command -v sudo >/dev/null 2>&1 || {
+        log WARN "sudo was not found; [multilib] was not changed."
+        return 1
+    }
+    sudo -v || {
+        log WARN "sudo authentication failed; [multilib] was not changed."
+        return 1
+    }
+
+    tmp="$(mktemp)" || {
+        log WARN "Could not create a temporary file; $conf was not changed."
+        return 1
+    }
+    if ! render_multilib_enabled_pacman_conf "$conf" >"$tmp" ||
+        ! multilib_config_has_include "$tmp"; then
+        rm -f -- "$tmp"
+        log WARN "Could not prepare a safe [multilib] configuration; $conf was not changed."
+        return 1
+    fi
+
+    if ! backup_file "$conf" pacman.conf; then
+        rm -f -- "$tmp"
+        log WARN "Could not back up $conf; [multilib] was not changed."
+        return 1
+    fi
+
+    if ! sudo_run install -D -m 0644 -- "$tmp" "$conf"; then
+        rm -f -- "$tmp"
+        log WARN "Could not update $conf; [multilib] was not changed."
+        return 1
+    fi
+    rm -f -- "$tmp"
+    record_change "modified" "$conf" "multilib-enabled" "-"
+    log INFO "Enabled [multilib] in $conf."
+
+    # Refresh the package databases so Steam and 32-bit libraries are visible.
+    if ! sudo_run pacman -Syu; then
+        log WARN "[multilib] is enabled, but the package refresh failed. Run 'sudo pacman -Syu' before installing Steam."
+        return 1
+    fi
+    log INFO "[multilib] is ready."
+    return 0
+}
+
+# Enable services without failing the whole module when a unit is missing or
+# already enabled. Returns 1 only when the unit could not be enabled at all.
+enable_service() {
+    local unit="$1"
+    local start="${2:-0}"
+
+    if ! command -v systemctl >/dev/null 2>&1; then
+        log WARN "systemctl was not found; cannot enable $unit."
+        return 1
+    fi
+
+    if ((DRY_RUN)); then
+        run sudo systemctl enable "$unit"
+        ((start)) && run sudo systemctl start "$unit"
+        return 0
+    fi
+
+    if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+        log INFO "Service $unit is already enabled."
+    elif ! sudo_run systemctl enable "$unit"; then
+        log WARN "Could not enable $unit; continuing without it."
+        return 1
+    else
+        log INFO "Enabled service $unit."
+    fi
+
+    if ((start)) && ! systemctl is-active --quiet "$unit" 2>/dev/null; then
+        sudo_run systemctl start "$unit" || log WARN "Could not start $unit; it may start on next boot."
+    fi
+    return 0
+}
+
+enable_services() {
+    local unit
+    for unit in "$@"; do
+        enable_service "$unit" || true
+    done
+}
+
+# Never switch the login manager automatically. If another display manager is
+# already enabled, leave it alone and explain how to change it manually.
+enable_display_manager() {
+    local wanted="$1"
+    local current=""
+    local dm
+
+    for dm in gdm lightdm greetd ly sddm; do
+        if systemctl is-enabled --quiet "$dm.service" 2>/dev/null; then
+            current="$dm"
+            break
+        fi
+    done
+
+    if [[ -n "$current" && "$current" != "$wanted" ]]; then
+        log WARN "Display manager '$current' is already enabled; not switching to $wanted automatically."
+        log WARN "To use $wanted, disable $current first and then enable $wanted.service."
+        return 0
+    fi
+    enable_service "$wanted.service"
+}
+
+enable_user_service() {
+    local unit="$1"
+
+    if ((DRY_RUN)); then
+        run systemctl --user enable --now "$unit"
+        return 0
+    fi
+    if ! command -v systemctl >/dev/null 2>&1 || [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+        log WARN "Cannot manage the user service $unit outside a graphical login session."
+        return 1
+    fi
+    if systemctl --user enable --now "$unit" >/dev/null 2>&1; then
+        log INFO "Enabled user service $unit."
+    else
+        log WARN "Could not enable user service $unit; it may start automatically when needed."
+        return 1
+    fi
+}
+
+# Add the Flathub remote system-wide if it is missing.
+ensure_flathub_remote() {
+    local url="https://flathub.org/repo/flathub.flatpakrepo"
+
+    if ((DRY_RUN)); then
+        run sudo flatpak remote-add --if-not-exists flathub "$url"
+        return 0
+    fi
+
+    if ! command -v flatpak >/dev/null 2>&1; then
+        log WARN "Flatpak is not installed; Flathub was not configured."
+        return 1
+    fi
+
+    if flatpak remotes --system 2>/dev/null | awk '{print $1}' | grep -qx 'flathub'; then
+        log INFO "Flathub is already configured system-wide."
+        return 0
+    fi
+    if ! sudo_run flatpak remote-add --if-not-exists flathub "$url"; then
+        log WARN "Could not add the Flathub remote; check your internet connection and try again."
+        return 1
+    fi
+    log INFO "Added the Flathub remote system-wide."
 }
 
 record_change() {

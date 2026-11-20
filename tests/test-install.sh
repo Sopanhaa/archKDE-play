@@ -112,6 +112,145 @@ assert "module registry resolves script paths" test -n "$(module_script 03)"
 assert "installer help works" install_help_works
 assert "installer rejects conflicting --full and --modules" install_rejects_conflicting_flags
 
+installer_rejects_two_profiles() {
+    ! bash "$ROOT_DIR/install.sh" --recommended --gaming >/dev/null 2>&1
+}
+assert "installer rejects two setup profiles" installer_rejects_two_profiles
+
+assert "recommended profile includes desktop, drivers, and gaming" equals_text "$(profile_modules recommended)" "01 02 03 04 05 06 07"
+assert "gaming profile focuses on drivers and gaming tools" equals_text "$(profile_modules gaming)" "03 05 06 07"
+assert "recommended profile leaves optional virtualization out" test "$(profile_modules recommended)" != "$ALL_MODULES"
+assert "profile titles are available" equals_text "$(profile_title gaming)" "Gaming essentials (KDE already installed)"
+assert_failure "unknown profiles are rejected" profile_modules unknown
+
+multilib_render_enables_repo() {
+    local conf="$tmp_dir/pacman-commented.conf"
+    local out="$tmp_dir/pacman-enabled.conf"
+    cat >"$conf" <<'EOF'
+[options]
+HoldPkg = pacman glibc
+
+#[multilib]
+#Include = /etc/pacman.d/mirrorlist
+
+[core]
+#Include = /etc/pacman.d/mirrorlist
+EOF
+    render_multilib_enabled_pacman_conf "$conf" >"$out" || return 1
+    multilib_config_has_include "$out" || return 1
+    grep -qx '\[multilib\]' "$out" || return 1
+    [[ "$(grep -c '^Include = /etc/pacman.d/mirrorlist$' "$out")" == 1 ]] || return 1
+    ! grep -q '^#\[multilib\]' "$out"
+}
+assert "renders a safe pacman.conf with multilib enabled" multilib_render_enables_repo
+
+multilib_render_keeps_enabled_repo() {
+    local conf="$tmp_dir/pacman-already.conf"
+    local out="$tmp_dir/pacman-already-out.conf"
+    cat >"$conf" <<'EOF'
+[options]
+HoldPkg = pacman glibc
+
+[multilib]
+Include = /etc/pacman.d/mirrorlist
+EOF
+    render_multilib_enabled_pacman_conf "$conf" >"$out" || return 1
+    cmp -s -- "$conf" "$out"
+}
+assert "leaves an already enabled multilib section unchanged" multilib_render_keeps_enabled_repo
+
+multilib_render_rejects_missing_include() {
+    local conf="$tmp_dir/pacman-no-include.conf"
+    local out="$tmp_dir/pacman-no-include-out.conf"
+    cat >"$conf" <<'EOF'
+[options]
+HoldPkg = pacman glibc
+
+#[multilib]
+EOF
+    render_multilib_enabled_pacman_conf "$conf" >"$out" || return 1
+    ! multilib_config_has_include "$out"
+}
+assert "rejects multilib sections without an Include line" multilib_render_rejects_missing_include
+
+multilib_dry_run_does_not_edit() {
+    local conf="$tmp_dir/pacman-dry.conf"
+    local before after
+    cat >"$conf" <<'EOF'
+[options]
+HoldPkg = pacman glibc
+
+#[multilib]
+#Include = /etc/pacman.d/mirrorlist
+EOF
+    before="$(file_sha256 "$conf")"
+    (PACMAN_CONF="$conf" DRY_RUN=1 ensure_multilib >/dev/null)
+    after="$(file_sha256 "$conf")"
+    [[ -n "$before" && "$before" == "$after" ]]
+}
+assert "dry-run does not edit pacman.conf for multilib" multilib_dry_run_does_not_edit
+
+package_install_skips_installed() (
+    pacman() {
+        case "$*" in
+            "-Q installed-package" | "-Si -- installed-package") return 0 ;;
+            *) return 1 ;;
+        esac
+    }
+    sudo_run() {
+        printf 'SUDO-RAN\n'
+        return 0
+    }
+    install_available_packages installed-package
+)
+assert "already installed packages are not reinstalled" test "$(package_install_skips_installed | grep -c '^SUDO-RAN$')" = "0"
+
+package_install_deduplicates() (
+    pacman() {
+        case "$*" in
+            "-Si -- dup-package") return 0 ;;
+            "-Q dup-package") return 1 ;;
+            *) return 0 ;;
+        esac
+    }
+    sudo_run() {
+        printf 'CALL:%s\n' "$*"
+        return 0
+    }
+    install_available_packages dup-package dup-package
+)
+assert "duplicate package names are installed only once" test "$(package_install_deduplicates | grep -c '^CALL:pacman -S')" = "1"
+
+service_enable_is_idempotent() (
+    # shellcheck disable=SC2032  # mock is intentionally invoked through sudo_run
+    systemctl() {
+        [[ "$1" == "is-enabled" ]] && return 0
+        return 1
+    }
+    sudo_run() {
+        printf 'SUDO-RAN\n'
+        return 0
+    }
+    enable_service example.service
+)
+assert "already enabled services are not enabled again" test "$(service_enable_is_idempotent | grep -c '^SUDO-RAN$')" = "0"
+
+display_manager_is_not_switched() (
+    # shellcheck disable=SC2032  # mock is intentionally invoked through sudo_run
+    systemctl() {
+        case "$*" in
+            "is-enabled --quiet gdm.service") return 0 ;;
+            *) return 1 ;;
+        esac
+    }
+    sudo_run() {
+        printf 'SUDO-RAN\n'
+        return 0
+    }
+    enable_display_manager sddm
+)
+assert "an existing display manager is not replaced" test "$(display_manager_is_not_switched | grep -c '^SUDO-RAN$')" = "0"
+
 installer_version_works() {
     local output
     output="$(bash "$ROOT_DIR/install.sh" --version 2>&1)"
@@ -135,6 +274,7 @@ assert "installer reports its version" installer_version_works
 assert "installer lists all modules" installer_lists_modules
 assert "quiet mode hides informational output" quiet_hides_info_but_keeps_warnings
 assert "rollback allowlist accepts managed modprobe configuration" rollback_target_allowed /etc/modprobe.d/arch-extreme-gaming-nvidia.conf
+assert "rollback allowlist accepts the current NVIDIA configuration name" rollback_target_allowed /etc/modprobe.d/archkde-play-nvidia.conf
 assert_failure "rollback allowlist rejects arbitrary files" rollback_target_allowed /etc/passwd
 assert_failure "rollback allowlist rejects path traversal" rollback_target_allowed /etc/modprobe.d/archkde-play-../../passwd
 
