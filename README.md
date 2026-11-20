@@ -98,49 +98,53 @@ manifest come from the same place. For higher assurance, pin a release tag with
   │  Arch Linux gaming setup                         │
   ╰──────────────────────────────────────────────────╯
 
+  Welcome! Let's set up your gaming system.
   System   Arch Linux x86_64 · NVIDIA GPU · KDE Plasma
   Safety   No partitions · No bootloader edits · No auto-reboot
 
-  [1] Recommended Gaming Setup            ★ Recommended
-      Drivers, KDE, Steam, tools, and performance setup
-  [2] Custom Installation
-      Choose exactly which modules to install
-  [3] Install GPU Drivers
-      NVIDIA, AMD, Intel, and hybrid graphics
-  [4] Gaming Applications
-      Steam, Lutris, Heroic, Wine, GameMode, MangoHud
-  [5] Performance Optimization
-      SSD trim and safe power profiles
-  [6] Check System Compatibility
-      Read-only check; nothing is changed
-  [0] Exit
-      Quit without changing anything
+  ❯  [1] Quick Setup                             (Recommended)
+        Drivers, KDE, Steam, tools, and performance setup
+     [2] Custom Setup
+        Choose exactly which modules to install
+     [3] GPU Drivers
+        NVIDIA, AMD, Intel, and hybrid graphics
+     [4] Gaming Apps
+        Steam, Lutris, Heroic, Wine, GameMode, MangoHud
+     [5] Performance Tools
+        SSD trim and safe power profiles
+     [6] System Check
+        Read-only check; nothing is changed
+     [0] Exit
+        Quit without changing anything
 
-  Press Enter for the recommended setup, or type a number.
+  ↑/↓ Navigate   Enter Select   Q Quit
+
   Choose an option [1]:
 ```
 
-The menu adapts to the terminal: it uses box-drawing characters and colors on
-UTF-8 terminals, and falls back to plain ASCII when needed.
+Use **↑/↓** (or `j`/`k`) to move, **Enter** to select, or type a number.
+On narrow terminals the descriptions are hidden; on terminals without Unicode
+or color support the menu uses plain ASCII. Non-interactive runs still require
+one of the CLI flags.
 
-- **1. Recommended** — system update, Zen kernel, GPU drivers, KDE Plasma,
+- **1. Quick Setup** — system update, Zen kernel, GPU drivers, KDE Plasma,
   gaming tools, Flatpak, and safe performance settings.
-- **2. Custom** — choose exactly which modules to install.
+- **2. Custom Setup** — choose exactly which modules to install.
 - **3. GPU Drivers** — detect NVIDIA/AMD/Intel/hybrid graphics and install the
   matching drivers and Vulkan libraries.
-- **4. Gaming Applications** — Steam, Lutris, Heroic, Wine, GameMode, MangoHud,
+- **4. Gaming Apps** — Steam, Lutris, Heroic, Wine, GameMode, MangoHud,
   Gamescope, and Proton tools.
-- **5. Performance** — SSD trim and safe power profiles only.
-- **6. Check System Compatibility** — run the read-only checks and exit.
+- **5. Performance Tools** — SSD trim and safe power profiles only.
+- **6. System Check** — run the read-only checks and exit.
 - **0. Exit** — leave without changing anything.
 
-Press **Enter** for the recommended setup, or type an option number.
+Press **Enter** for Quick Setup, or type an option number.
 
 ---
 
 ## What happens during setup
 
-1. **Menu** — choose the recommended setup, custom modules, a single area, or a
+1. **Menu** — choose Quick Setup, Custom Setup, a single area, or a
    compatibility check.
 2. **System check** — confirms Arch Linux, internet, disk space, `sudo`, the
    package database, KDE Plasma, your GPU, and your bootloader.
@@ -148,12 +152,31 @@ Press **Enter** for the recommended setup, or type an option number.
    space, and recommends suitable options.
 4. **Plan and confirmation** — shows exactly which modules will run and asks
    once before changing anything.
-5. **Installation** — installs packages, enables services safely, and skips
-   anything already installed.
+5. **Installation** — shows per-module progress (`→` running, `✓` complete),
+   installs packages, enables services safely, and skips anything already
+   installed.
 6. **Summary** — shows what completed, the log location, and next steps.
 
-If something fails, the installer stops with a clear message, keeps the log,
-and tells you how to rerun only the failed module. Rerunning is safe.
+If a module fails, the installer shows the error, common recovery steps, and
+offers to retry that module. Declining stops before continuing to later modules
+and keeps the log for troubleshooting. Rerunning is safe.
+
+### Progress and errors
+
+During installation, each module reports real status:
+
+```text
+  → [1/4] GPU drivers
+  ✓ [1/4] GPU drivers (8s)
+  → [2/4] Gaming tools
+  ✓ [2/4] Gaming tools (12s)
+```
+
+- `→` means the module is running.
+- `✓` is shown only after the module completes successfully.
+- `✗` means it failed; the installer then offers to retry the module.
+- Detailed output and errors are still saved under
+  `~/.local/state/archkde-play/logs/`.
 
 ---
 
@@ -161,12 +184,12 @@ and tells you how to rerun only the failed module. Rerunning is safe.
 
 | Menu choice | Modules | Best for |
 |-------------|---------|----------|
-| **1. Recommended** | 01–07 | A new or mostly fresh Arch gaming PC |
-| **2. Custom** | Your choice | Skip optional parts or install one module |
+| **1. Quick Setup** | 01–07 | A new or mostly fresh Arch gaming PC |
+| **2. Custom Setup** | Your choice | Skip optional parts or install one module |
 | **3. GPU Drivers** | 03 | Fix or install graphics drivers |
-| **4. Gaming Applications** | 05 | Add Steam, Lutris, Heroic, Wine, and tools |
-| **5. Performance** | 07 | SSD trim and safe power profiles |
-| **6. Check** | none | Read-only compatibility check |
+| **4. Gaming Apps** | 05 | Add Steam, Lutris, Heroic, Wine, and tools |
+| **5. Performance Tools** | 07 | SSD trim and safe power profiles |
+| **6. System Check** | none | Read-only compatibility check |
 | `--full` | 01–08 | Everything, including optional virtualization |
 | `--gaming` | 03, 05, 06, 07 | KDE is already installed; add gaming tools |
 
@@ -301,7 +324,7 @@ bash ~/.local/share/archkde-play/source/scripts/health-check.sh
 | `curl` download fails | Check your internet connection and rerun the `curl` command. The URL uses HTTPS and should return a small Bash file. |
 | `Checksum verification failed` | The archive or checksum manifest was corrupted or changed. Delete `archkde-install.sh`, then download and run it again. |
 | `SHA256SUMS` cannot be downloaded | Retry. If you are testing a fork or a tag without a manifest, use the `git clone` method. Do not disable checksum verification for a remote HTTPS install. |
-| Install stops with an error | Read the log path shown on screen (`~/.local/state/archkde-play/logs/`), fix the reported issue, then rerun the same command or the failed module, e.g. `./install.sh --modules 03`. Rerunning is safe. |
+| Install stops with an error | The installer first offers to retry the failed module. If you decline, read the log path shown on screen (`~/.local/state/archkde-play/logs/`), fix the reported issue, then rerun the same command or the failed module, e.g. `./install.sh --modules 03`. Rerunning is safe. |
 | `pacman is locked` | Wait for another update or package manager to finish. Do not delete the lock unless you are sure no update is running. |
 | No internet / downloads fail | Reconnect, then rerun. Check with `ping archlinux.org`. |
 | Steam is missing | Enable `[multilib]` (the installer offers this), run `sudo pacman -Syu`, then `./install.sh --modules 05`. |
@@ -362,7 +385,7 @@ revert drivers, or change boot entries. Backups are kept under
 
 - **Zen kernel (02):** better responsiveness for some desktops and games. Your
   existing kernel is kept as a fallback. It is included in the recommended
-  profile; use `--gaming` or Custom Installation to skip it. Boot entries are
+  profile; use `--gaming` or Custom Setup to skip it. Boot entries are
   never edited.
 - **KDE Plasma (04):** skip it if you already use KDE. If another display
   manager is enabled, SDDM is installed but not forced.
@@ -381,6 +404,7 @@ revert drivers, or change boot entries. Backups are kept under
 install.sh              Guided installer, remote entry point, and menu
 SHA256SUMS              Checksums used by the remote entry point
 lib/common.sh           Shared helpers (logging, packages, services, safety)
+lib/ui.sh               Terminal UI: menu, keyboard navigation, progress helpers
 lib/preflight.sh        Read-only system checks
 lib/modules.sh          Single source of truth for modules and profiles
 modules/NN-*.sh         One focused script per installation step

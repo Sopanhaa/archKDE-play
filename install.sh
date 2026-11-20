@@ -139,6 +139,7 @@ bootstrap_verify_manifest() {
         install.sh \
         lib/common.sh \
         lib/modules.sh \
+        lib/ui.sh \
         lib/preflight.sh \
         modules/01-system.sh \
         config/packages.conf; do
@@ -260,6 +261,7 @@ bootstrap_remote_installer() {
         install.sh \
         lib/common.sh \
         lib/modules.sh \
+        lib/ui.sh \
         lib/preflight.sh \
         modules/01-system.sh \
         config/packages.conf; do
@@ -337,6 +339,7 @@ bootstrap_remote_installer() {
 
 if [[ ! -f "$ROOT_DIR/lib/common.sh" ||
     ! -f "$ROOT_DIR/lib/modules.sh" ||
+    ! -f "$ROOT_DIR/lib/ui.sh" ||
     ! -f "$ROOT_DIR/lib/preflight.sh" ||
     ! -f "$ROOT_DIR/config/packages.conf" ||
     ! -d "$ROOT_DIR/modules" ]]; then
@@ -344,8 +347,9 @@ if [[ ! -f "$ROOT_DIR/lib/common.sh" ||
 fi
 
 source "$ROOT_DIR/lib/common.sh"
-source "$ROOT_DIR/lib/preflight.sh"
 source "$ROOT_DIR/lib/modules.sh"
+source "$ROOT_DIR/lib/ui.sh"
+source "$ROOT_DIR/lib/preflight.sh"
 
 DRY_RUN=0
 SELECTION=""
@@ -388,12 +392,12 @@ Options:
   --help, -h      Show this help.
 
 Menu options:
-  1  Recommended gaming setup
-  2  Custom module selection
-  3  Install GPU drivers
-  4  Gaming applications
-  5  Performance optimization
-  6  Check system compatibility
+  1  Quick Setup (recommended)
+  2  Custom Setup
+  3  GPU Drivers
+  4  Gaming Apps
+  5  Performance Tools
+  6  System Check
   0  Exit
 
 Advanced custom selection:
@@ -448,17 +452,6 @@ if ((selected_modes > 1)); then
 fi
 if ((SELECTION_SET)) && [[ -z "${SELECTION//[[:space:]]/}" ]]; then
     die "--modules requires at least one module number."
-fi
-
-# Dry-run and check mode must not create log or state files.
-if ((DRY_RUN || CHECK_ONLY)); then
-    export LOG_FILE="/dev/null"
-    export LOG_TEE=0
-else
-    init_logging
-    export LOG_FILE
-    export LOG_TEE=1
-    exec > >(tee -a "$LOG_FILE") 2>&1
 fi
 
 print_common_fixes() {
@@ -517,258 +510,6 @@ if ((SELECTION_SET)); then
     fi
 fi
 
-show_module_menu() {
-    local i
-    section "Custom installation"
-    printf '  a) All modules\n\n'
-    for i in "${!MODULE_NUMBERS[@]}"; do
-        printf '  %s) %s\n' "${MODULE_NUMBERS[$i]}" "${MODULE_TITLES[$i]}"
-        printf '      %s\n' "${MODULE_DESCRIPTIONS[$i]}"
-    done
-    printf '\n  q) Go back\n'
-    printf '\nEnter numbers separated by spaces or commas (for example: 03 05 06),\n'
-    printf 'a range such as 03-06, or "all".\n'
-}
-
-menu_option() {
-    local key="$1"
-    local label="$2"
-    local description="${3:-}"
-    local tag="${4:-}"
-
-    printf '  %s[%s]%s %s%-42s%s' \
-        "$C_BOLD$C_YELLOW" "$key" "$C_RESET" "$C_BOLD" "$label" "$C_RESET"
-    if [[ -n "$tag" ]]; then
-        printf '  %s%s%s' "$C_GREEN" "$tag" "$C_RESET"
-    fi
-    printf '\n'
-    if [[ -n "$description" ]]; then
-        printf '       %s%s%s\n' "$C_DIM" "$description" "$C_RESET"
-    fi
-}
-
-show_main_menu() {
-    local locale="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
-    local sep=" | "
-    local recommended_mark="*"
-    local top_left="+"
-    local top_right="+"
-    local bottom_left="+"
-    local bottom_right="+"
-    local horizontal="-"
-    local vertical="|"
-    local rule=""
-    local i
-
-    locale="${locale,,}"
-    if [[ "$locale" == *utf-8* || "$locale" == *utf8* ]] &&
-        [[ "${TERM:-dumb}" != "dumb" ]]; then
-        sep=" · "
-        recommended_mark="★"
-        top_left="╭"
-        top_right="╮"
-        bottom_left="╰"
-        bottom_right="╯"
-        horizontal="─"
-        vertical="│"
-    fi
-    for ((i = 0; i < 50; i++)); do
-        rule+="$horizontal"
-    done
-
-    local os="Linux"
-    local gpu="Unknown GPU"
-    local kde=""
-    local info vendors
-    [[ -f /etc/arch-release ]] && os="Arch Linux"
-    info="$(detect_system_gpu_info)"
-    vendors="$(detect_gpu_vendors "$info")"
-    local -a vendor_list=()
-    mapfile -t vendor_list <<<"$vendors"
-    gpu="$(gpu_vendor_label "${vendor_list[@]}") GPU"
-    if command -v plasmashell >/dev/null 2>&1; then
-        kde="KDE Plasma"
-    fi
-
-    local system_line
-    system_line="$os $(uname -m)${sep}${gpu}"
-    if [[ -n "$kde" ]]; then
-        system_line+="${sep}${kde}"
-    fi
-    local safety_line="No partitions${sep}No bootloader edits${sep}No auto-reboot"
-
-    printf '\n'
-    printf '  %s%s%s\n' "$C_CYAN" "${top_left}${rule}${top_right}" "$C_RESET"
-    printf '  %s%s%s %s%-48s%s %s%s%s\n' \
-        "$C_CYAN" "$vertical" "$C_RESET" "$C_BOLD" " archKDE-play" "$C_RESET" \
-        "$C_CYAN" "$vertical" "$C_RESET"
-    printf '  %s%s%s %-48s %s%s%s\n' \
-        "$C_CYAN" "$vertical" "$C_RESET" " Arch Linux gaming setup" \
-        "$C_CYAN" "$vertical" "$C_RESET"
-    printf '  %s%s%s\n' \
-        "$C_CYAN" "${bottom_left}${rule}${bottom_right}" "$C_RESET"
-    printf '\n  %sSystem%s   %s\n' "$C_BOLD" "$C_RESET" "$system_line"
-    printf '  %sSafety%s   %s%s%s\n' \
-        "$C_BOLD" "$C_RESET" "$C_DIM" "$safety_line" "$C_RESET"
-    printf '\n'
-
-    menu_option 1 "Recommended Gaming Setup" \
-        "Drivers, KDE, Steam, tools, and performance setup" \
-        "${recommended_mark} Recommended"
-    menu_option 2 "Custom Installation" \
-        "Choose exactly which modules to install"
-    menu_option 3 "Install GPU Drivers" \
-        "NVIDIA, AMD, Intel, and hybrid graphics"
-    menu_option 4 "Gaming Applications" \
-        "Steam, Lutris, Heroic, Wine, GameMode, MangoHud"
-    menu_option 5 "Performance Optimization" \
-        "SSD trim and safe power profiles"
-    menu_option 6 "Check System Compatibility" \
-        "Read-only check; nothing is changed"
-    menu_option 0 "Exit" \
-        "Quit without changing anything"
-
-    printf '\n  %sPress Enter for the recommended setup, or type a number.%s\n' \
-        "$C_DIM" "$C_RESET"
-}
-
-show_selection() {
-    local number
-    section "Installation plan"
-    for number in $SELECTED_MODULES; do
-        printf '  %s  %s\n' "$number" "$(module_title "$number")"
-    done
-    if ((DRY_RUN)); then
-        printf '\nDry run: these modules would run, but nothing will be changed.\n'
-    else
-        printf '\nThe installer asks for confirmation before making changes.\n'
-    fi
-    printf 'It will never format disks, edit bootloader entries, or reboot automatically.\n'
-    if [[ " $SELECTED_MODULES " != *" 08 "* ]]; then
-        printf 'Optional virtualization (08) is not included; add it later with: bash %q --modules 08\n' "$ROOT_DIR/install.sh"
-    fi
-}
-
-interactive_select_modules() {
-    local answer normalized
-    show_module_menu
-
-    while true; do
-        printf '\nSelect modules (or q to go back): '
-        if ! IFS= read -r answer; then
-            printf '\n'
-            return 1
-        fi
-        answer="${answer#"${answer%%[![:space:]]*}"}"
-        answer="${answer%"${answer##*[![:space:]]}"}"
-
-        case "${answer,,}" in
-            "") ui_warn "Please enter a selection, or q to go back."; continue ;;
-            a|all) SELECTED_MODULES="$ALL_MODULES"; return 0 ;;
-            q|quit|exit) return 1 ;;
-            h|help|\?) show_module_menu; continue ;;
-        esac
-
-        if normalized="$(parse_module_selection "$answer")"; then
-            SELECTED_MODULES="$normalized"
-            return 0
-        fi
-        ui_warn "That selection was not understood. Use 01-08, a range like 03-05, or all."
-    done
-}
-
-interactive_select() {
-    local answer normalized
-    show_main_menu
-
-    while true; do
-        printf '\n  Choose an option [1]: '
-        if ! IFS= read -r answer; then
-            printf '\n'
-            return 1
-        fi
-        answer="${answer#"${answer%%[![:space:]]*}"}"
-        answer="${answer%"${answer##*[![:space:]]}"}"
-
-        case "${answer,,}" in
-            ""|1|recommended|recommend)
-                SELECTED_MODULES="$RECOMMENDED_MODULES"
-                MENU_SELECTED=1
-                return 0
-                ;;
-            2|custom|advanced)
-                if interactive_select_modules; then
-                    MENU_SELECTED=1
-                    return 0
-                fi
-                return 1
-                ;;
-            3|gpu|gpu-drivers|drivers)
-                SELECTED_MODULES="03"
-                MENU_SELECTED=1
-                return 0
-                ;;
-            4|gaming|apps|applications)
-                SELECTED_MODULES="05"
-                MENU_SELECTED=1
-                return 0
-                ;;
-            5|performance|optimization)
-                SELECTED_MODULES="07"
-                MENU_SELECTED=1
-                return 0
-                ;;
-            6|check|compatibility)
-                CHECK_ONLY=1
-                MENU_SELECTED=1
-                return 0
-                ;;
-            0|q|quit|exit)
-                return 1
-                ;;
-            h|help|\?)
-                show_main_menu
-                continue
-                ;;
-        esac
-
-        # Keep the old power-user behaviour: typing module numbers still works.
-        if normalized="$(parse_module_selection "$answer")"; then
-            SELECTED_MODULES="$normalized"
-            MENU_SELECTED=1
-            return 0
-        fi
-        ui_warn "Enter 0-6, or q to quit. Advanced users can also type module numbers such as 03 05."
-    done
-}
-
-show_recommendation() {
-    local info vendors
-    info="$(detect_system_gpu_info)"
-    vendors="$(detect_gpu_vendors "$info")"
-
-    section "Recommendation"
-    if gpu_has_vendor nvidia "$vendors"; then
-        printf '  NVIDIA graphics detected: the driver module chooses a matching NVIDIA package.\n'
-    elif gpu_has_vendor amd "$vendors"; then
-        printf '  AMD graphics detected: Mesa and Vulkan drivers will be installed.\n'
-    elif gpu_has_vendor intel "$vendors"; then
-        printf '  Intel graphics detected: Mesa and Intel Vulkan drivers will be installed.\n'
-    fi
-    if ((!SELECTION_SET && !FULL_INSTALL && !PROFILE_SET && !MENU_SELECTED)); then
-        if package_installed plasma-desktop 2>/dev/null; then
-            printf '  KDE Plasma is already installed: choose Custom Installation to skip the desktop module.\n'
-        fi
-    fi
-    if ! multilib_enabled; then
-        printf '  [multilib] is disabled: the installer can enable it for Steam when needed.\n'
-    fi
-    printf '  Recommended gaming packages: Steam, Lutris, Heroic, Wine, GameMode, and MangoHud.\n'
-    if ((!SELECTION_SET && !FULL_INSTALL && !PROFILE_SET && !MENU_SELECTED)); then
-        printf '  Press Enter at the menu to use the recommended gaming setup.\n'
-    fi
-}
-
 choose_modules() {
     if ((MENU_SELECTED)); then
         return 0
@@ -798,15 +539,28 @@ choose_modules() {
 }
 
 # Show the setup menu before the checks so the user can also choose the
-# "Check System Compatibility" option.
+# "System Check" option.
 if ((!CHECK_ONLY && !SELECTION_SET && !FULL_INSTALL && !PROFILE_SET)); then
     if [[ ! -t 0 ]]; then
-        die "Interactive input is unavailable. Use --recommended, --gaming, --full, --modules LIST, or --check."
+        printf 'Interactive input is unavailable. Use --recommended, --gaming, --full, --modules LIST, or --check.\n' >&2
+        exit 1
     fi
     if ! interactive_select; then
-        log INFO "Installation cancelled. Nothing was changed."
+        printf '\n  Installation cancelled. Nothing was changed.\n'
         exit 0
     fi
+fi
+
+# Initialize logging after the menu so interactive UI output stays out of the
+# log file and quitting from the menu does not create state files.
+if ((DRY_RUN || CHECK_ONLY)); then
+    export LOG_FILE="/dev/null"
+    export LOG_TEE=0
+else
+    init_logging
+    export LOG_FILE
+    export LOG_TEE=1
+    exec > >(tee -a "$LOG_FILE") 2>&1
 fi
 
 if ((DRY_RUN || CHECK_ONLY)); then
@@ -878,31 +632,50 @@ for number in "${selected_module_numbers[@]}"; do
         die "sudo authentication failed; rerun after fixing your sudo access."
     fi
 
-    section "Module $module_index of $module_count: $CURRENT_MODULE_LABEL"
-    log INFO "Starting module $number ($module_index/$module_count)."
-    module_start=$SECONDS
+    while true; do
+        ui_step "[$module_index/$module_count] $CURRENT_MODULE_LABEL"
+        log INFO "Starting module $number ($module_index/$module_count)."
+        module_start=$SECONDS
 
-    if DRY_RUN="$DRY_RUN" SETUP_MODULE_NUMBER="$number" \
-        SETUP_MODULE_INDEX="$module_index" SETUP_MODULE_TOTAL="$module_count" \
-        bash "${module_paths[$number]}"; then
-        elapsed=$((SECONDS - module_start))
-        MODULES_COMPLETED+=("$number")
-        log INFO "Module $number finished successfully in $(format_duration "$elapsed")."
-    else
-        status=$?
-        log ERROR "Module $number ($CURRENT_MODULE_LABEL) failed with exit status $status."
-        log ERROR "No changes were rolled back automatically. Review the log: $LOG_FILE"
-        log ERROR "Fix the reported problem, then rerun this module with: bash \"$ROOT_DIR/install.sh\" --modules $number"
-        print_common_fixes
-        exit "$status"
-    fi
+        if DRY_RUN="$DRY_RUN" SETUP_MODULE_NUMBER="$number" \
+            SETUP_MODULE_INDEX="$module_index" SETUP_MODULE_TOTAL="$module_count" \
+            bash "${module_paths[$number]}"; then
+            elapsed=$((SECONDS - module_start))
+            MODULES_COMPLETED+=("$number")
+            ui_done "[$module_index/$module_count] $CURRENT_MODULE_LABEL ($(format_duration "$elapsed"))"
+            log INFO "Module $number finished successfully in $(format_duration "$elapsed")."
+            break
+        else
+            status=$?
+            ui_error_step "[$module_index/$module_count] $CURRENT_MODULE_LABEL failed"
+            log ERROR "Module $number ($CURRENT_MODULE_LABEL) failed with exit status $status."
+            log ERROR "No changes were rolled back automatically. Review the log: $LOG_FILE"
+            log ERROR "Fix the reported problem, then rerun this module with: bash \"$ROOT_DIR/install.sh\" --modules $number"
+            print_common_fixes
+
+            if ((DRY_RUN)) || [[ ! -t 0 ]]; then
+                exit "$status"
+            fi
+
+            read -r -p "Retry this module? [y/N] " retry || retry=""
+            if [[ "$retry" =~ ^[Yy]$ ]]; then
+                log WARN "Retrying module $number..."
+                continue
+            fi
+            exit "$status"
+        fi
+    done
 done
 
 CURRENT_MODULE=""
 CURRENT_MODULE_LABEL=""
 
 section "Setup complete"
-printf '  Modules completed: %s\n' "${MODULES_COMPLETED[*]-}"
+if ((${#MODULES_COMPLETED[@]})); then
+    for number in "${MODULES_COMPLETED[@]}"; do
+        ui_done "$number  $(module_title "$number")"
+    done
+fi
 if ((DRY_RUN)); then
     printf '  Mode: dry run (nothing was changed)\n'
 else

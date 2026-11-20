@@ -117,6 +117,15 @@ installer_rejects_two_profiles() {
 }
 assert "installer rejects two setup profiles" installer_rejects_two_profiles
 
+noninteractive_without_flags_fails_cleanly() {
+    local output
+    if output="$(bash "$ROOT_DIR/install.sh" </dev/null 2>&1)"; then
+        return 1
+    fi
+    [[ "$output" == *"Interactive input is unavailable"* ]]
+}
+assert "non-interactive runs without flags fail clearly" noninteractive_without_flags_fails_cleanly
+
 assert "recommended profile includes desktop, drivers, and gaming" equals_text "$(profile_modules recommended)" "01 02 03 04 05 06 07"
 assert "gaming profile focuses on drivers and gaming tools" equals_text "$(profile_modules gaming)" "03 05 06 07"
 assert "recommended profile leaves optional virtualization out" test "$(profile_modules recommended)" != "$ALL_MODULES"

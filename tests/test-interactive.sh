@@ -110,7 +110,13 @@ EOF
 run_with_input() {
     local input="$1"
     shift
-    printf '%s\n' "$input" |
+    {
+        local line
+        while IFS= read -r line; do
+            printf '%s\n' "$line"
+            sleep 0.05
+        done <<<"$input"
+    } |
         SHELL=/bin/bash script -qec "bash '$tmp_dir/run.sh' $*" /dev/null \
             >"$tmp_dir/output.txt" 2>&1
     tr -d '\r' <"$tmp_dir/output.txt" >"$tmp_dir/output.clean"
@@ -134,9 +140,23 @@ assert_output() {
     fi
 }
 
+assert_not_output() {
+    local description="$1"
+    local status="$2"
+    local unexpected="$3"
+    tests_run=$((tests_run + 1))
+    if ((status == 0)) && ! grep -Fq -- "$unexpected" "$tmp_dir/output.txt"; then
+        printf 'ok - %s\n' "$description"
+    else
+        printf 'not ok - %s\n' "$description"
+        sed 's/^/    /' "$tmp_dir/output.txt"
+        tests_failed=$((tests_failed + 1))
+    fi
+}
+
 run_with_input 1 --dry-run --no-color
 status=$?
-assert_output "interactive menu shows the recommended setup option" "$status" "[1] Recommended Gaming Setup"
+assert_output "interactive menu shows the recommended setup option" "$status" "[1] Quick Setup"
 assert_output "recommended dry-run completes" "$status" "Setup complete"
 assert_output "dry-run reports that nothing changed" "$status" "Mode: dry run"
 
@@ -157,6 +177,32 @@ assert_output "menu option 6 checks compatibility" "$status" "Check complete"
 run_with_input 0 --no-color
 status=$?
 assert_output "menu option 0 exits without changes" "$status" "Installation cancelled"
+
+run_with_input $'\x1b[B\n03' --dry-run --no-color
+status=$?
+assert_output "arrow-key navigation reaches Custom Setup" "$status" "03  GPU drivers and Vulkan"
+assert_output "arrow-key navigation dry-run completes" "$status" "Setup complete"
+
+run_with_input $'9\n0' --no-color
+status=$?
+assert_output "invalid menu input shows a warning" "$status" "Use arrow keys, a number, or q."
+assert_output "invalid menu input can be recovered" "$status" "Installation cancelled"
+
+run_with_input $'2\nq\n0' --no-color
+status=$?
+assert_output "custom setup can return to the main menu" "$status" "Custom setup"
+assert_output "returning to the menu can then exit" "$status" "Installation cancelled"
+
+COLUMNS=50 run_with_input 0 --no-color
+status=$?
+assert_output "narrow terminals show the compact menu" "$status" "[1] Quick Setup"
+assert_not_output "narrow terminals avoid the wide box" "$status" "╭"
+
+TERM=dumb LANG=C run_with_input 0 --no-color
+status=$?
+assert_output "plain-text fallback shows numbered options" "$status" "Type a number and press Enter"
+assert_output "plain-text fallback can exit" "$status" "Installation cancelled"
+assert_not_output "plain-text fallback avoids Unicode box characters" "$status" "╭"
 
 if [[ -e "$marker" ]]; then
     printf 'not ok - interactive flow tried to change the system\n'
