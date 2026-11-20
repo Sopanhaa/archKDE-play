@@ -374,8 +374,7 @@ scripts/                Health check, update, rollback, checksum, and lint helpe
 tests/                  Bash tests, mocks, and dry-run checks
 ```
 
-For contributors, see `CONTRIBUTING.md` (style, tests, pull requests),
-`SECURITY.md` (private reports), and `CODE_OF_CONDUCT.md`.
+For security reports, see `SECURITY.md`.
 
 ## License
 
