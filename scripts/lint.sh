@@ -25,6 +25,11 @@ else
     printf 'ShellCheck is not installed; skipping static analysis.\n'
 fi
 
+if command -v sha256sum >/dev/null 2>&1 && [[ -f "$ROOT_DIR/scripts/checksums.sh" ]]; then
+    printf 'Verifying SHA256SUMS.\n'
+    bash "$ROOT_DIR/scripts/checksums.sh" --check || status=1
+fi
+
 printf 'Running the test suite.\n'
 for test_file in "$ROOT_DIR"/tests/test-*.sh; do
     printf '  %s\n' "$(basename -- "$test_file")"

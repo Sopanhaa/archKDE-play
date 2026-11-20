@@ -112,6 +112,15 @@ preflight_check_pacman() {
     fi
 }
 
+preflight_check_desktop() {
+    if command -v plasmashell >/dev/null 2>&1 ||
+        package_installed plasma-desktop 2>/dev/null; then
+        ui_ok "KDE Plasma detected."
+    else
+        ui_note "KDE Plasma was not detected; the desktop module can install it."
+    fi
+}
+
 preflight_check_graphics() {
     local info vendors
 
@@ -168,6 +177,7 @@ run_preflight_checks() {
     preflight_check_network
     preflight_check_storage
     preflight_check_pacman
+    preflight_check_desktop
     preflight_check_graphics
     preflight_check_boot
 

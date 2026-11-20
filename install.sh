@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+
+if [ -z "${BASH_VERSION:-}" ]; then
+    printf 'Run this installer with bash, not sh.\n' >&2
+    exit 1
+fi
+
 set -Eeuo pipefail
 
 # Decide about colour before lib/common.sh is sourced, because the installer
@@ -13,6 +19,302 @@ if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != "dumb" ]]; then
 fi
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# ---------------------------------------------------------------------------
+# Remote one-command bootstrap
+#
+# The README tells users to download only this file, for example:
+#   curl -fsSL .../install.sh -o archkde-install.sh
+#   bash archkde-install.sh
+#
+# When the rest of the repository is not present, this file downloads the
+# repository archive over HTTPS, verifies it against SHA256SUMS, and launches
+# the real installer. A downloaded file is never piped directly into a shell.
+# ---------------------------------------------------------------------------
+ARCHKDE_REPO="${ARCHKDE_REPO:-Sopanhaa/archKDE-play}"
+ARCHKDE_REF="${ARCHKDE_REF:-main}"
+ARCHKDE_REPO_URL="${ARCHKDE_REPO_URL:-https://github.com/${ARCHKDE_REPO}}"
+ARCHKDE_RAW_URL="${ARCHKDE_RAW_URL:-https://raw.githubusercontent.com/${ARCHKDE_REPO}/${ARCHKDE_REF}}"
+ARCHKDE_ARCHIVE_URL="${ARCHKDE_ARCHIVE_URL:-${ARCHKDE_REPO_URL}/archive/${ARCHKDE_REF}.tar.gz}"
+ARCHKDE_CHECKSUM_URL="${ARCHKDE_CHECKSUM_URL:-${ARCHKDE_RAW_URL}/SHA256SUMS}"
+BOOTSTRAP_TMP=""
+
+bootstrap_die() {
+    printf '\nERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+bootstrap_cleanup() {
+    if [[ -n "$BOOTSTRAP_TMP" && -d "$BOOTSTRAP_TMP" ]]; then
+        rm -rf -- "$BOOTSTRAP_TMP"
+    fi
+}
+
+bootstrap_scheme_allowed() {
+    local url="$1"
+    case "$url" in
+        https://*) return 0 ;;
+        file://*|http://*) [[ "${ARCHKDE_ALLOW_INSECURE_SOURCE:-0}" == "1" ]] ;;
+        *) return 1 ;;
+    esac
+}
+
+bootstrap_download() {
+    local url="$1"
+    local dest="$2"
+
+    bootstrap_scheme_allowed "$url" ||
+        bootstrap_die "Refusing a non-HTTPS download URL: $url (set ARCHKDE_ALLOW_INSECURE_SOURCE=1 only for local testing)."
+
+    if [[ "$url" == file://* ]]; then
+        if ! cp -- "${url#file://}" "$dest"; then
+            bootstrap_die "Could not copy the local installer archive: ${url#file://}"
+        fi
+        return 0
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        if [[ "$url" == https://* ]]; then
+            if ! curl -fL --proto '=https' --proto-redir '=https' --tlsv1.2 \
+                --retry 2 --connect-timeout 15 --max-time 180 \
+                -o "$dest" -- "$url"; then
+                bootstrap_die "Download failed: $url"
+            fi
+        elif ! curl -fL --retry 2 --connect-timeout 15 --max-time 180 \
+            -o "$dest" -- "$url"; then
+            bootstrap_die "Download failed: $url"
+        fi
+        return 0
+    fi
+
+    if command -v wget >/dev/null 2>&1; then
+        if [[ "$url" == https://* ]]; then
+            if ! wget -q --https-only --timeout=30 --tries=2 -O "$dest" -- "$url"; then
+                bootstrap_die "Download failed: $url"
+            fi
+        elif ! wget -q --timeout=30 --tries=2 -O "$dest" -- "$url"; then
+            bootstrap_die "Download failed: $url"
+        fi
+        return 0
+    fi
+
+    bootstrap_die "curl or wget is required to download the installer."
+}
+
+bootstrap_file_sha256() {
+    local file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum -- "$file" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 -- "$file" | awk '{print $1}'
+    else
+        return 1
+    fi
+}
+
+bootstrap_verify_manifest() {
+    local root="$1"
+    local manifest="$2"
+    local required
+
+    command -v sha256sum >/dev/null 2>&1 ||
+        bootstrap_die "sha256sum is required to verify the downloaded installer."
+    for required in \
+        install.sh \
+        lib/common.sh \
+        lib/modules.sh \
+        lib/preflight.sh \
+        modules/01-system.sh \
+        config/packages.conf; do
+        if ! awk -v file="$required" '$2 == file { found = 1 } END { exit !found }' "$manifest"; then
+            bootstrap_die "SHA256SUMS does not cover a required file: $required"
+        fi
+    done
+    if ! (cd "$root" && sha256sum -c --strict --quiet -- "$manifest"); then
+        bootstrap_die "Checksum verification failed. The download may be corrupt or tampered with. Delete the file and try again."
+    fi
+}
+
+bootstrap_remote_installer() {
+    local archive manifest listing verbose extract root actual status entry
+    local persist=1 persist_root staging expected_entry entry_hash verify_entry=0
+    local -a top_entries=()
+
+    for entry in "$@"; do
+        case "$entry" in
+            --help|-h|--version|--list-modules|--check|--preflight|--dry-run)
+                persist=0
+                ;;
+        esac
+    done
+
+    [[ "$ARCHKDE_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+        bootstrap_die "ARCHKDE_REPO must look like owner/repository."
+    [[ "$ARCHKDE_REF" =~ ^[A-Za-z0-9._/-]+$ ]] ||
+        bootstrap_die "ARCHKDE_REF contains unsupported characters."
+
+    if [[ "${ARCHKDE_BOOTSTRAPPED:-0}" == "1" ]]; then
+        bootstrap_die "The downloaded installer is incomplete (lib/ or modules/ is missing)."
+    fi
+
+    command -v tar >/dev/null 2>&1 ||
+        bootstrap_die "tar is required to unpack the installer."
+
+    trap bootstrap_cleanup EXIT
+    BOOTSTRAP_TMP="$(mktemp -d)" ||
+        bootstrap_die "Could not create a temporary directory."
+    chmod 700 -- "$BOOTSTRAP_TMP"
+
+    printf '\narchKDE-play remote installer\n'
+    printf 'Repository: %s (%s)\n' "$ARCHKDE_REPO" "$ARCHKDE_REF"
+    printf 'Downloading the repository archive over HTTPS...\n'
+
+    archive="$BOOTSTRAP_TMP/archkde-play.tar.gz"
+    bootstrap_download "$ARCHKDE_ARCHIVE_URL" "$archive"
+    [[ -s "$archive" ]] || bootstrap_die "The downloaded archive is empty."
+
+    listing="$BOOTSTRAP_TMP/archive.list"
+    if ! tar -tzf "$archive" >"$listing" 2>/dev/null; then
+        bootstrap_die "The downloaded file is not a valid .tar.gz archive."
+    fi
+    while IFS= read -r entry; do
+        [[ -n "$entry" ]] || continue
+        case "$entry" in
+            /*) bootstrap_die "Archive contains an absolute path: $entry" ;;
+        esac
+        case "/$entry/" in
+            */../*) bootstrap_die "Archive contains an unsafe path: $entry" ;;
+        esac
+    done <"$listing"
+
+    verbose="$BOOTSTRAP_TMP/archive.verbose"
+    if ! tar -tvzf "$archive" >"$verbose" 2>/dev/null; then
+        bootstrap_die "Could not inspect the installer archive."
+    fi
+    while IFS= read -r entry; do
+        case "${entry:0:1}" in
+            -|d) ;;
+            *) bootstrap_die "Archive contains an unsupported entry type: $entry" ;;
+        esac
+    done <"$verbose"
+
+    extract="$BOOTSTRAP_TMP/extract"
+    mkdir -p -- "$extract"
+    if ! tar -xzf "$archive" -C "$extract" \
+        --no-same-owner --no-same-permissions 2>/dev/null; then
+        bootstrap_die "Could not unpack the installer archive."
+    fi
+
+    shopt -s nullglob
+    top_entries=("$extract"/*)
+    shopt -u nullglob
+    ((${#top_entries[@]} == 1)) ||
+        bootstrap_die "Unexpected archive layout; expected one top-level directory."
+    root="${top_entries[0]}"
+    [[ -d "$root" ]] || bootstrap_die "The unpacked installer directory is missing."
+
+    local required
+    for required in \
+        install.sh \
+        lib/common.sh \
+        lib/modules.sh \
+        lib/preflight.sh \
+        modules/01-system.sh \
+        config/packages.conf; do
+        [[ -f "$root/$required" ]] ||
+            bootstrap_die "The downloaded installer is incomplete: missing $required"
+    done
+
+    if [[ "${ARCHKDE_SKIP_CHECKSUM:-0}" == "1" ]]; then
+        printf 'WARNING: checksum verification skipped (ARCHKDE_SKIP_CHECKSUM=1).\n' >&2
+    else
+        printf 'Downloading SHA256SUMS and verifying installer files...\n'
+        manifest="$BOOTSTRAP_TMP/SHA256SUMS"
+        bootstrap_download "$ARCHKDE_CHECKSUM_URL" "$manifest"
+        bootstrap_verify_manifest "$root" "$manifest"
+        printf '  [OK] Installer files match SHA256SUMS.\n'
+
+        # On the default main branch, verify the entry script itself against the
+        # same manifest. This catches a stale or modified downloaded entry file.
+        if [[ -f "${BASH_SOURCE[0]}" ]]; then
+            if [[ "$ARCHKDE_REF" == "main" &&
+                "$ARCHKDE_ARCHIVE_URL" == "${ARCHKDE_REPO_URL}/archive/main.tar.gz" &&
+                "$ARCHKDE_CHECKSUM_URL" == "${ARCHKDE_RAW_URL}/SHA256SUMS" ]]; then
+                verify_entry=1
+            fi
+            if [[ "${ARCHKDE_ALLOW_INSECURE_SOURCE:-0}" == "1" ]]; then
+                verify_entry=1
+            fi
+        fi
+        if ((verify_entry)); then
+            expected_entry="$(awk '$2 == "install.sh" { print $1; exit }' "$manifest")"
+            entry_hash="$(bootstrap_file_sha256 "${BASH_SOURCE[0]}" || true)"
+            if [[ -n "$expected_entry" && -n "$entry_hash" &&
+                "$entry_hash" != "$expected_entry" ]]; then
+                bootstrap_die "The downloaded entry script does not match SHA256SUMS. Delete it, download it again, and retry."
+            fi
+            printf '  [OK] Entry script matches SHA256SUMS.\n'
+        fi
+    fi
+
+    if [[ -n "${ARCHKDE_SHA256:-}" ]]; then
+        actual="$(bootstrap_file_sha256 "$archive")" ||
+            bootstrap_die "sha256sum or shasum is required to verify ARCHKDE_SHA256."
+        if [[ "${actual,,}" != "${ARCHKDE_SHA256,,}" ]]; then
+            bootstrap_die "Archive SHA256 does not match ARCHKDE_SHA256."
+        fi
+        printf '  [OK] Archive SHA256 matches ARCHKDE_SHA256.\n'
+    else
+        actual="$(bootstrap_file_sha256 "$archive" || true)"
+        if [[ -n "$actual" ]]; then
+            printf '  Archive SHA256: %s\n' "$actual"
+        fi
+        printf '  Set ARCHKDE_SHA256=<hash> to pin the archive hash as well.\n'
+    fi
+
+    if ((persist)) && [[ -n "${HOME:-}" ]]; then
+        persist_root="${XDG_DATA_HOME:-${HOME}/.local/share}/archkde-play/source"
+        staging="${persist_root}.new.$$"
+        if ! mkdir -p -- "$(dirname -- "$persist_root")"; then
+            printf 'WARNING: could not create the installer source directory; continuing from a temporary directory.\n' >&2
+        elif {
+            rm -rf -- "$staging"
+            cp -a -- "$root" "$staging"
+        }; then
+            rm -rf -- "$persist_root"
+            if mv -- "$staging" "$persist_root"; then
+                root="$persist_root"
+                printf '  Installer source saved to: %s\n' "$root"
+            else
+                rm -rf -- "$staging"
+                printf 'WARNING: could not save the installer source; continuing from a temporary directory.\n' >&2
+            fi
+        else
+            rm -rf -- "$staging"
+            printf 'WARNING: could not save the installer source; continuing from a temporary directory.\n' >&2
+        fi
+    fi
+
+    export ARCHKDE_BOOTSTRAPPED=1
+    export ARCHKDE_VERSION="$ARCHKDE_REF"
+    printf '\nLaunching the installer...\n\n'
+
+    if bash "$root/install.sh" "$@"; then
+        exit 0
+    else
+        status=$?
+        exit "$status"
+    fi
+}
+
+if [[ ! -f "$ROOT_DIR/lib/common.sh" ||
+    ! -f "$ROOT_DIR/lib/modules.sh" ||
+    ! -f "$ROOT_DIR/lib/preflight.sh" ||
+    ! -f "$ROOT_DIR/config/packages.conf" ||
+    ! -d "$ROOT_DIR/modules" ]]; then
+    bootstrap_remote_installer "$@"
+fi
+
 source "$ROOT_DIR/lib/common.sh"
 source "$ROOT_DIR/lib/preflight.sh"
 source "$ROOT_DIR/lib/modules.sh"
@@ -24,6 +326,7 @@ FULL_INSTALL=0
 PROFILE=""
 PROFILE_SET=0
 CHECK_ONLY=0
+MENU_SELECTED=0
 CURRENT_MODULE=""
 CURRENT_MODULE_LABEL=""
 MODULES_COMPLETED=()
@@ -31,9 +334,14 @@ MODULES_COMPLETED=()
 usage() {
     cat <<'EOF'
 Usage: ./install.sh [options]
+       bash archkde-install.sh [options]   (downloaded entry script)
+
+One-command install:
+  curl -fsSL https://raw.githubusercontent.com/Sopanhaa/archKDE-play/main/install.sh -o archkde-install.sh
+  bash archkde-install.sh
 
 Recommended:
-  ./install.sh                  Show a simple menu (press Enter for recommended).
+  ./install.sh                  Show the setup menu.
   ./install.sh --recommended    Install the recommended gaming setup.
   ./install.sh --gaming         Install gaming tools only (KDE already installed).
   ./install.sh --dry-run        Preview everything without changing anything.
@@ -51,12 +359,20 @@ Options:
   --no-color      Disable coloured terminal output.
   --help, -h      Show this help.
 
-Advanced interactive use:
-  Choose option 3 in the menu, then enter module numbers such as:
+Menu options:
+  1  Recommended gaming setup
+  2  Custom module selection
+  3  Install GPU drivers
+  4  Gaming applications
+  5  Performance optimization
+  6  Check system compatibility
+  0  Exit
+
+Advanced custom selection:
+  Enter module numbers such as:
     03 05 06        specific modules
     03-06           a range
-    all or 0        every module
-    q               quit
+    all             every module
 
 No option ever formats disks, edits bootloader entries, or reboots.
 EOF
@@ -68,7 +384,7 @@ project_version() {
         git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         version="$(git -C "$ROOT_DIR" describe --tags --always --dirty 2>/dev/null || true)"
     fi
-    printf '%s\n' "${version:-dev}"
+    printf '%s\n' "${version:-${ARCHKDE_VERSION:-dev}}"
 }
 
 while (($#)); do
@@ -149,7 +465,7 @@ on_error() {
     else
         log ERROR "Read the full log here: $LOG_FILE"
     fi
-    log ERROR "Review project-managed changes with: ./scripts/rollback.sh --dry-run"
+    log ERROR "Review project-managed changes with: bash \"$ROOT_DIR/scripts/rollback.sh\" --dry-run"
     log ERROR "Fix the problem above, then rerun the same command. Completed modules are safe to rerun."
     print_common_fixes
     exit "$status"
@@ -181,8 +497,8 @@ fi
 
 show_module_menu() {
     local i
-    section "Custom module selection"
-    printf '  0) All modules\n\n'
+    section "Custom installation"
+    printf '  a) All modules\n\n'
     for i in "${!MODULE_NUMBERS[@]}"; do
         printf '  %s) %s\n' "${MODULE_NUMBERS[$i]}" "${MODULE_TITLES[$i]}"
         printf '      %s\n' "${MODULE_DESCRIPTIONS[$i]}"
@@ -193,14 +509,16 @@ show_module_menu() {
 }
 
 show_main_menu() {
-    section "Choose a setup"
-    printf '  1) %s  (recommended)\n' "$(profile_title recommended)"
-    printf '     %s\n\n' "$(profile_description recommended)"
-    printf '  2) %s\n' "$(profile_title gaming)"
-    printf '     %s\n\n' "$(profile_description gaming)"
-    printf '  3) Custom module selection (advanced)\n'
-    printf '     Pick exactly what to install, or skip optional parts.\n\n'
-    printf '  q) Quit without changing anything\n'
+    printf '\n================================\n'
+    printf '       archKDE-play Setup\n'
+    printf '================================\n\n'
+    printf '[1] Recommended Gaming Setup\n'
+    printf '[2] Custom Installation\n'
+    printf '[3] Install GPU Drivers\n'
+    printf '[4] Gaming Applications\n'
+    printf '[5] Performance Optimization\n'
+    printf '[6] Check System Compatibility\n'
+    printf '[0] Exit\n'
     printf '\nPress Enter for the recommended setup.\n'
 }
 
@@ -217,7 +535,7 @@ show_selection() {
     fi
     printf 'It will never format disks, edit bootloader entries, or reboot automatically.\n'
     if [[ " $SELECTED_MODULES " != *" 08 "* ]]; then
-        printf 'Optional virtualization (08) is not included; add it later with --modules 08.\n'
+        printf 'Optional virtualization (08) is not included; add it later with: bash %q --modules 08\n' "$ROOT_DIR/install.sh"
     fi
 }
 
@@ -236,6 +554,7 @@ interactive_select_modules() {
 
         case "${answer,,}" in
             "") ui_warn "Please enter a selection, or q to go back."; continue ;;
+            a|all) SELECTED_MODULES="$ALL_MODULES"; return 0 ;;
             q|quit|exit) return 1 ;;
             h|help|\?) show_module_menu; continue ;;
         esac
@@ -253,7 +572,7 @@ interactive_select() {
     show_main_menu
 
     while true; do
-        printf '\nChoice [1]: '
+        printf '\nChoose an option: '
         if ! IFS= read -r answer; then
             printf '\n'
             return 1
@@ -264,19 +583,37 @@ interactive_select() {
         case "${answer,,}" in
             ""|1|recommended|recommend)
                 SELECTED_MODULES="$RECOMMENDED_MODULES"
+                MENU_SELECTED=1
                 return 0
                 ;;
-            2|gaming|essentials)
-                SELECTED_MODULES="$GAMING_MODULES"
-                return 0
-                ;;
-            3|custom|advanced)
+            2|custom|advanced)
                 if interactive_select_modules; then
+                    MENU_SELECTED=1
                     return 0
                 fi
                 return 1
                 ;;
-            q|quit|exit)
+            3|gpu|gpu-drivers|drivers)
+                SELECTED_MODULES="03"
+                MENU_SELECTED=1
+                return 0
+                ;;
+            4|gaming|apps|applications)
+                SELECTED_MODULES="05"
+                MENU_SELECTED=1
+                return 0
+                ;;
+            5|performance|optimization)
+                SELECTED_MODULES="07"
+                MENU_SELECTED=1
+                return 0
+                ;;
+            6|check|compatibility)
+                CHECK_ONLY=1
+                MENU_SELECTED=1
+                return 0
+                ;;
+            0|q|quit|exit)
                 return 1
                 ;;
             h|help|\?)
@@ -288,9 +625,10 @@ interactive_select() {
         # Keep the old power-user behaviour: typing module numbers still works.
         if normalized="$(parse_module_selection "$answer")"; then
             SELECTED_MODULES="$normalized"
+            MENU_SELECTED=1
             return 0
         fi
-        ui_warn "Enter 1, 2, 3, or q. Advanced users can also type module numbers such as 03 05."
+        ui_warn "Enter 0-6, or q to quit. Advanced users can also type module numbers such as 03 05."
     done
 }
 
@@ -307,20 +645,25 @@ show_recommendation() {
     elif gpu_has_vendor intel "$vendors"; then
         printf '  Intel graphics detected: Mesa and Intel Vulkan drivers will be installed.\n'
     fi
-    if ((!SELECTION_SET && !FULL_INSTALL && !PROFILE_SET)); then
+    if ((!SELECTION_SET && !FULL_INSTALL && !PROFILE_SET && !MENU_SELECTED)); then
         if package_installed plasma-desktop 2>/dev/null; then
-            printf '  KDE Plasma is already installed: option 2 focuses on drivers and gaming tools.\n'
+            printf '  KDE Plasma is already installed: choose Custom Installation to skip the desktop module.\n'
         fi
     fi
     if ! multilib_enabled; then
         printf '  [multilib] is disabled: the installer can enable it for Steam when needed.\n'
     fi
-    if ((!SELECTION_SET && !FULL_INSTALL && !PROFILE_SET)); then
+    printf '  Recommended gaming packages: Steam, Lutris, Heroic, Wine, GameMode, and MangoHud.\n'
+    if ((!SELECTION_SET && !FULL_INSTALL && !PROFILE_SET && !MENU_SELECTED)); then
         printf '  Press Enter at the menu to use the recommended gaming setup.\n'
     fi
 }
 
 choose_modules() {
+    if ((MENU_SELECTED)); then
+        return 0
+    fi
+
     if ((SELECTION_SET)); then
         SELECTED_MODULES="$SELECTION"
         return 0
@@ -349,6 +692,18 @@ if ((DRY_RUN || CHECK_ONLY)); then
     log WARN "Log file: not written (dry-run/check mode)."
 else
     log INFO "Log file: $LOG_FILE"
+fi
+
+# Show the setup menu before the checks so the user can also choose the
+# "Check System Compatibility" option.
+if ((!CHECK_ONLY && !SELECTION_SET && !FULL_INSTALL && !PROFILE_SET)); then
+    if [[ ! -t 0 ]]; then
+        die "Interactive input is unavailable. Use --recommended, --gaming, --full, --modules LIST, or --check."
+    fi
+    if ! interactive_select; then
+        log INFO "Installation cancelled. Nothing was changed."
+        exit 0
+    fi
 fi
 
 if ! run_preflight_checks; then
@@ -428,7 +783,7 @@ for number in "${selected_module_numbers[@]}"; do
         status=$?
         log ERROR "Module $number ($CURRENT_MODULE_LABEL) failed with exit status $status."
         log ERROR "No changes were rolled back automatically. Review the log: $LOG_FILE"
-        log ERROR "Fix the reported problem, then rerun this module with: ./install.sh --modules $number"
+        log ERROR "Fix the reported problem, then rerun this module with: bash \"$ROOT_DIR/install.sh\" --modules $number"
         print_common_fixes
         exit "$status"
     fi
@@ -451,7 +806,7 @@ else
 fi
 if ((!DRY_RUN)); then
     printf '  Tracked configuration changes: %s\n' "$(tracked_change_count)"
-    printf '  Review rollback with: ./scripts/rollback.sh --dry-run\n'
+    printf '  Review rollback with: bash %q --dry-run\n' "$ROOT_DIR/scripts/rollback.sh"
 fi
 printf '\nNext steps:\n'
 if [[ " $SELECTED_MODULES " == *" 02 "* || " $SELECTED_MODULES " == *" 03 "* ]]; then
@@ -460,7 +815,7 @@ fi
 if [[ " $SELECTED_MODULES " == *" 08 "* ]]; then
     printf '  - Sign out and back in if this setup added you to the libvirt group.\n'
 fi
-printf '  - Run ./scripts/health-check.sh to verify the installation.\n'
+printf '  - Run bash %q to verify the installation.\n' "$ROOT_DIR/scripts/health-check.sh"
 if [[ " $SELECTED_MODULES " == *" 02 "* ]]; then
     printf '  - Check your bootloader menu before rebooting to use linux-zen.\n'
 fi

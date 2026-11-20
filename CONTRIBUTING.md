@@ -29,9 +29,17 @@ bash scripts/lint.sh
 ```
 
 `scripts/lint.sh` runs `bash -n`, ShellCheck when available, the unit tests in
-`tests/test-install.sh`, and the mocked module dry-run tests in
-`tests/test-dry-run-modules.sh`. If you change installation behavior, also run
-the affected modules with `--dry-run` on an Arch system.
+`tests/test-install.sh`, the mocked download tests in `tests/test-bootstrap.sh`,
+the optional bubblewrap menu test in `tests/test-interactive.sh`, and checks
+that `SHA256SUMS` is current. If you change installation behavior, also run the
+affected modules with `--dry-run` on an Arch system.
+
+After changing any shell file or `config/` file, regenerate the checksum
+manifest used by the one-command installer:
+
+```bash
+bash scripts/checksums.sh
+```
 
 ## Code style
 

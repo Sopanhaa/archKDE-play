@@ -11,6 +11,34 @@ edits bootloader entries, and never reboots your computer.
 
 ---
 
+## Install in one command
+
+Download the small entry script, then run it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Sopanhaa/archKDE-play/main/install.sh -o archkde-install.sh
+bash archkde-install.sh
+```
+
+Optional: inspect the entry script first with `less archkde-install.sh`.
+
+The entry script downloads the repository archive over HTTPS, verifies it
+against `SHA256SUMS`, and launches the installer.
+It does **not** pipe downloaded code directly into a shell.
+
+You do not run the whole installer as root. It asks for `sudo` only when system
+changes are needed.
+
+### Or use a local clone
+
+```bash
+git clone https://github.com/Sopanhaa/archKDE-play.git
+cd archKDE-play
+./install.sh
+```
+
+---
+
 ## Requirements
 
 - Arch Linux (64-bit, `x86_64`) with internet access
@@ -22,50 +50,77 @@ edits bootloader entries, and never reboots your computer.
 
 ---
 
-## Quick start
+## How the download is verified
 
-Run these three commands:
+- The repository URL is HTTPS and fixed by default.
+- The entry script downloads a GitHub archive and a `SHA256SUMS` manifest.
+- Every installer file is checked against the manifest before anything runs.
+  On the default `main` branch, the downloaded entry script itself is checked
+  against the same manifest as well.
+- You can additionally pin the archive hash:
+  ```bash
+  ARCHKDE_SHA256=<sha256> bash archkde-install.sh
+  ```
+- The archive is unpacked into a private temporary directory and removed on
+  exit. For a real installation, the verified source is also saved under
+  `~/.local/share/archkde-play/source` so you can rerun modules and run the
+  health check later. Check/dry-run/help runs do not save it.
+- Nothing is piped directly into `bash`.
+- You can inspect the entry script before running it. The repository is also
+  available as a normal `git clone` if you prefer to review every file first.
+- `ARCHKDE_REF` selects a branch or tag, and `ARCHKDE_REPO` selects a fork.
+  For a reproducible install, use a release tag:
+  ```bash
+  ARCHKDE_REF=v1.2.3 bash archkde-install.sh
+  ```
+  `ARCHKDE_SKIP_CHECKSUM=1` exists only for offline testing and is not
+  recommended.
 
-```bash
-git clone https://github.com/Sopanhaa/archKDE-play.git
-cd archKDE-play
-./install.sh
-```
+If verification fails, delete the downloaded file and run the command again.
 
-You will see a short system check and a menu:
+---
+
+## Setup menu
 
 ```text
-1) Recommended gaming setup  (recommended)
-2) Gaming essentials (KDE already installed)
-3) Custom module selection (advanced)
-q) Quit
+================================
+       archKDE-play Setup
+================================
+
+[1] Recommended Gaming Setup
+[2] Custom Installation
+[3] Install GPU Drivers
+[4] Gaming Applications
+[5] Performance Optimization
+[6] Check System Compatibility
+[0] Exit
+
+Choose an option:
 ```
 
-**Press Enter** to choose the recommended setup. Review the plan, then type `y`
-at the single confirmation prompt.
+- **1. Recommended** — system update, Zen kernel, GPU drivers, KDE Plasma,
+  gaming tools, Flatpak, and safe performance settings.
+- **2. Custom** — choose exactly which modules to install.
+- **3. GPU Drivers** — detect NVIDIA/AMD/Intel/hybrid graphics and install the
+  matching drivers and Vulkan libraries.
+- **4. Gaming Applications** — Steam, Lutris, Heroic, Wine, GameMode, MangoHud,
+  Gamescope, and Proton tools.
+- **5. Performance** — SSD trim and safe power profiles only.
+- **6. Check System Compatibility** — run the read-only checks and exit.
+- **0. Exit** — leave without changing anything.
 
-That is the recommended command for almost everyone:
-
-```bash
-./install.sh
-```
-
-To choose the recommended setup without the menu:
-
-```bash
-./install.sh --recommended
-```
+Press **Enter** for the recommended setup, or type an option number.
 
 ---
 
 ## What happens during setup
 
-1. **System check** — confirms Arch Linux, internet, disk space, `sudo`, the
-   package database, your GPU, and your bootloader.
-2. **Hardware summary** — shows your CPU, RAM, GPU vendor(s), storage, and free
+1. **Menu** — choose the recommended setup, custom modules, a single area, or a
+   compatibility check.
+2. **System check** — confirms Arch Linux, internet, disk space, `sudo`, the
+   package database, KDE Plasma, your GPU, and your bootloader.
+3. **Hardware summary** — shows your CPU, RAM, GPU vendor(s), storage, and free
    space, and recommends suitable options.
-3. **Setup menu** — pick the recommended setup, gaming essentials, or custom
-   modules. Optional parts can be skipped.
 4. **Plan and confirmation** — shows exactly which modules will run and asks
    once before changing anything.
 5. **Installation** — installs packages, enables services safely, and skips
@@ -79,12 +134,16 @@ and tells you how to rerun only the failed module. Rerunning is safe.
 
 ## Setup options
 
-| Choice | Modules | Best for |
-|--------|---------|----------|
+| Menu choice | Modules | Best for |
+|-------------|---------|----------|
 | **1. Recommended** | 01–07 | A new or mostly fresh Arch gaming PC |
-| **2. Gaming essentials** | 03, 05, 06, 07 | KDE is already installed; add drivers and gaming tools |
-| **3. Custom** | Your choice | Skip optional parts or install one module |
+| **2. Custom** | Your choice | Skip optional parts or install one module |
+| **3. GPU Drivers** | 03 | Fix or install graphics drivers |
+| **4. Gaming Applications** | 05 | Add Steam, Lutris, Heroic, Wine, and tools |
+| **5. Performance** | 07 | SSD trim and safe power profiles |
+| **6. Check** | none | Read-only compatibility check |
 | `--full` | 01–08 | Everything, including optional virtualization |
+| `--gaming` | 03, 05, 06, 07 | KDE is already installed; add gaming tools |
 
 ### Modules
 
@@ -111,7 +170,8 @@ and tells you how to rerun only the failed module. Rerunning is safe.
 | Recommended setup, no menu | `./install.sh --recommended` |
 | Gaming tools only | `./install.sh --gaming` |
 | Check the system (no changes) | `./install.sh --check` |
-| Preview everything (no changes) | `./install.sh --dry-run --recommended` |
+| Preview the menu flow (no changes) | `./install.sh --dry-run` |
+| Preview recommended setup (no changes) | `./install.sh --dry-run --recommended` |
 | Install specific modules | `./install.sh --modules 03,05,06` |
 | Install a range | `./install.sh --modules 03-05` |
 | Install everything | `./install.sh --full` |
@@ -120,6 +180,14 @@ and tells you how to rerun only the failed module. Rerunning is safe.
 | Preview updates | `./scripts/update.sh --dry-run` |
 | Skip third-party AUR updates | `./scripts/update.sh --skip-aur` |
 | Preview config rollback | `./scripts/rollback.sh --dry-run` |
+
+When you used the one-command download, replace `./install.sh` with
+`bash archkde-install.sh`, for example:
+
+```bash
+bash archkde-install.sh --check
+bash archkde-install.sh --dry-run
+```
 
 No command ever uses automatic `--noconfirm` installation or reboots your PC.
 
@@ -184,12 +252,30 @@ sudo pacman -Syu
 7. **Virtualization:** if module 08 ran, sign out and back in before using
    Virtual Machine Manager, so the `libvirt` group applies.
 
+If you used the one-command download, the verified source is saved here:
+
+```bash
+~/.local/share/archkde-play/source/install.sh
+```
+
+(or `$XDG_DATA_HOME/archkde-play/source` when `XDG_DATA_HOME` is set)
+
+So you can rerun a module or check health without downloading again:
+
+```bash
+bash ~/.local/share/archkde-play/source/install.sh --modules 05
+bash ~/.local/share/archkde-play/source/scripts/health-check.sh
+```
+
 ---
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
+| `curl` download fails | Check your internet connection and rerun the `curl` command. The URL uses HTTPS and should return a small Bash file. |
+| `Checksum verification failed` | The archive or checksum manifest was corrupted or changed. Delete `archkde-install.sh`, then download and run it again. |
+| `SHA256SUMS` cannot be downloaded | Retry. If you are testing a fork or a tag without a manifest, use the `git clone` method instead of `ARCHKDE_SKIP_CHECKSUM=1`. |
 | Install stops with an error | Read the log path shown on screen (`~/.local/state/archkde-play/logs/`), fix the reported issue, then rerun the same command or the failed module, e.g. `./install.sh --modules 03`. Rerunning is safe. |
 | `pacman is locked` | Wait for another update or package manager to finish. Do not delete the lock unless you are sure no update is running. |
 | No internet / downloads fail | Reconnect, then rerun. Check with `ping archlinux.org`. |
@@ -225,6 +311,10 @@ Update official packages, Flatpak apps, optional AUR packages, and the project:
 ./scripts/update.sh
 ```
 
+The saved one-command source is not a Git checkout, so `update.sh` updates
+packages but skips the project Git pull. Rerun the download command to refresh
+the saved source.
+
 Rollback removes **only** configuration files created by this project whose
 contents are still unchanged:
 
@@ -243,8 +333,8 @@ revert drivers, or change boot entries. Backups are kept under
 
 - **Zen kernel (02):** better responsiveness for some desktops and games. Your
   existing kernel is kept as a fallback. It is included in the recommended
-  profile; choose gaming essentials or custom selection to skip it. Boot entries
-  are never edited.
+  profile; use `--gaming` or Custom Installation to skip it. Boot entries are
+  never edited.
 - **KDE Plasma (04):** skip it if you already use KDE. If another display
   manager is enabled, SDDM is installed but not forced.
 - **Flatpak (06):** adds the Flathub store for apps such as Heroic if a native
@@ -259,13 +349,14 @@ revert drivers, or change boot entries. Backups are kept under
 ## Project structure
 
 ```text
-install.sh              Guided installer and profile menu
+install.sh              Guided installer, remote entry point, and menu
+SHA256SUMS              Checksums used by the remote entry point
 lib/common.sh           Shared helpers (logging, packages, services, safety)
 lib/preflight.sh        Read-only system checks
 lib/modules.sh          Single source of truth for modules and profiles
 modules/NN-*.sh         One focused script per installation step
 config/                 Package lists and managed configuration files
-scripts/                Health check, update, rollback, and lint helpers
+scripts/                Health check, update, rollback, checksum, and lint helpers
 tests/                  Bash tests, mocks, and dry-run checks
 ```
 
